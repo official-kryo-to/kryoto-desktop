@@ -47,13 +47,13 @@ pub fn place(view: &tauri::Webview, x: f64, y: f64, width: f64, height: f64) {
     let _ = view.with_webview(move |w| {
         let widget: gtk::Widget = w.inner().upcast();
         widget.set_widget_name(&name);
-        RECTS.with(|m| m.borrow_mut().insert(name, r));
-        let overlay = OVERLAY.with(|o| o.borrow().clone()).or_else(|| {
-            let made = wrap_shell(&widget)?;
-            OVERLAY.with(|o| *o.borrow_mut() = Some(made.clone()));
-            Some(made)
-        });
+        
+        // Attach the dimensions directly to the widget, bypassing the global HashMap.
+            widget.set_data("rect", r);
+        
+        let overlay = get_or_create_overlay(&widget);
         let Some(overlay) = overlay else { return };
+        
         if widget.parent().as_ref() != Some(overlay.upcast_ref()) {
             adopt(&overlay, &widget);
         }
@@ -61,29 +61,54 @@ pub fn place(view: &tauri::Webview, x: f64, y: f64, width: f64, height: f64) {
     });
 }
 
-/// Move the shell out of Tauri's box into a new overlay that takes its place.
-fn wrap_shell(placed: &gtk::Widget) -> Option<gtk::Overlay> {
+/// Helper: Finds the Overlay in the current window, fixing the multi-window issue 
+/// (where OVERLAY was global).
+fn get_or_create_overlay(placed: &gtk::Widget) -> Option<gtk::Overlay> {
     let vbox = placed.parent()?.downcast::<gtk::Box>().ok()?;
-    // The shell was packed first; every other web view is placed here.
+    
+    // If the overlay already exists in this box (window), use it.
+    if let Some(overlay) = vbox.children().into_iter().find_map(|c| c.downcast::<gtk::Overlay>().ok()) {
+        return Some(overlay);
+    }
+    
+    // If not, create a new one.
+    wrap_shell(placed, &vbox)
+}
+
+/// Move the shell out of Tauri's box into a new overlay that takes its place.
+fn wrap_shell(placed: &gtk::Widget, vbox: &gtk::Box) -> Option<gtk::Overlay> {
+    // Faster type checking via GType with a string comparison fallback.
+    let webview_type = gtk::glib::Type::from_name("WebKitWebView")
+        .unwrap_or(gtk::glib::Type::INVALID);
+
     let shell = vbox
         .children()
         .into_iter()
-        .find(|c| c != placed && c.type_().name() == "WebKitWebView")?;
+        .find(|c| c != placed && (c.type_() == webview_type || c.type_().name() == "WebKitWebView"))?;
+
     let overlay = gtk::Overlay::new();
-    // `shell` holds the widget alive across the remove.
     vbox.remove(&shell);
     overlay.add(&shell);
+    
     overlay.connect_get_child_position(|_, child| {
-        let name = child.widget_name().to_string();
-        let (x, y, w, h) = RECTS.with(|m| m.borrow().get(&name).copied())?;
-        Some(gtk::gdk::Rectangle::new(x, y, w, h))
+        // Real-time coordinate read directly from the widget pointer, O(1) complexity and allocation-free.
+        let rect_ptr = unsafe { child.data::<Rect>("rect") };
+        if let Some(ptr) = rect_ptr {
+            let (x, y, w, h) = unsafe { *ptr.as_ref() };
+            Some(gtk::gdk::Rectangle::new(x, y, w, h))
+        } else {
+            None
+        }
     });
+    
     vbox.pack_start(&overlay, true, true, 0);
     overlay.show();
     shell.show();
     resize_edges(&shell);
     Some(overlay)
 }
+    
+
 
 /// Take a web view out of Tauri's box and lay it over the shell, keeping
 /// whatever visibility it was last given.
