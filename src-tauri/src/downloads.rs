@@ -224,13 +224,14 @@ fn backoff(n: u32) -> u64 {
 }
 
 /// The HTTP client every download of ours starts from.
+/// Paranoid note: by setting user agent to Mozilla we will get rid of cloudflare errors on linux
 fn client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
-        .user_agent(concat!("KryotoDesktop/", env!("CARGO_PKG_VERSION")))
-        .tcp_nodelay(true)
-        .tcp_keepalive(std::time::Duration::from_secs(30))
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .pool_max_idle_per_host(64)
+    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    .tcp_nodelay(true)
+    .tcp_keepalive(std::time::Duration::from_secs(30))
+    .connect_timeout(std::time::Duration::from_secs(15))
+    .pool_max_idle_per_host(64)
 }
 
 /// Send, giving up when the server takes longer than `ANSWER_TIMEOUT` to answer.
