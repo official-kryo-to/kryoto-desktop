@@ -40,6 +40,8 @@ export type ArtLayer = {
   paths: { tone: Tone; d: string }[]
   /** Where the control sits (pixel centre), for pointing at it. */
   at: { x: number; y: number }
+  /** Its pixels' bounds, inclusive: where an arrow can point at it from. */
+  box: { x0: number; y0: number; x1: number; y1: number }
 }
 
 export type PadArt = { family: PadFamily; width: number; height: number; layers: ArtLayer[] }
@@ -302,7 +304,7 @@ const SHOULDERS: Record<PadFamily, [[number, number], [number, number]]> = {
 
 type Grid = (Tone | null)[]
 
-function rasterize(part: Part): { grid: Grid; at: { x: number; y: number } } {
+function rasterize(part: Part): { grid: Grid; at: { x: number; y: number }; box: ArtLayer['box'] } {
   const inside = new Uint8Array(ART_W * ART_H)
   let sx = 0, sy = 0, n = 0, minX = ART_W, maxX = 0, minY = ART_H, maxY = 0
   for (let y = 0; y < ART_H; y++)
@@ -360,7 +362,11 @@ function rasterize(part: Part): { grid: Grid; at: { x: number; y: number } } {
       }),
     )
   }
-  return { grid, at: n ? { x: sx / n + 0.5, y: sy / n + 0.5 } : { x: 0, y: 0 } }
+  return {
+    grid,
+    at: n ? { x: sx / n + 0.5, y: sy / n + 0.5 } : { x: 0, y: 0 },
+    box: n ? { x0: minX, y0: minY, x1: maxX, y1: maxY } : { x0: 0, y0: 0, x1: 0, y1: 0 },
+  }
 }
 
 /** Horizontal runs of each tone, as one path per tone. */
@@ -395,8 +401,8 @@ export function padArt(family: PadFamily): PadArt {
     ...spec.parts,
   ]
   const layers = parts.map((p) => {
-    const { grid, at } = rasterize(p)
-    return { control: p.control ?? null, paths: toPaths(grid), at }
+    const { grid, at, box } = rasterize(p)
+    return { control: p.control ?? null, paths: toPaths(grid), at, box }
   })
   const art = { family, width: ART_W, height: ART_H, layers }
   cache.set(family, art)

@@ -42,6 +42,7 @@ export function PadArtView({
   onHover,
   names,
   callouts,
+  pointer,
   className,
 }: {
   family: PadFamily
@@ -53,6 +54,8 @@ export function PadArtView({
   /** Tooltips: each control's name on this pad. */
   names?: (c: PadControl) => string
   callouts?: Callout[]
+  /** A pixel arrow at one control, bouncing in steps: press it, or push the stick that way. */
+  pointer?: Pointer | null
   className?: string
 }) {
   const art = useMemo(() => padArt(family), [family])
@@ -112,6 +115,7 @@ export function PadArtView({
           </g>
         )
       })}
+      {pointer ? <Arrow pointer={pointer} layers={art.layers} /> : null}
       {placed.map((p) => {
         const on = focus === p.control || (D_PAD.includes(p.control) && focus !== null && focus !== undefined && D_PAD.includes(focus))
         const lit = on || (pressed ? (D_PAD.includes(p.control) ? D_PAD.some((d) => pressed.has(d)) : pressed.has(p.control)) : false)
@@ -144,6 +148,68 @@ export function PadArtView({
         )
       })}
     </svg>
+  )
+}
+
+export type Pointer = { control: PadControl; way: 'press' | 'right' | 'down' }
+
+const DOWN = ['#####', '.###.', '..#..']
+const RIGHT = ['#..', '##.', '###', '##.', '#..']
+const ARROWS = {
+  down: DOWN,
+  up: [...DOWN].reverse(),
+  right: RIGHT,
+  left: RIGHT.map((r) => [...r].reverse().join('')),
+}
+type Side = 'above' | 'below' | 'left' | 'right'
+
+/** Which side a control to press is pointed at from: the outside of its cluster. */
+const ARROW_SIDE: Partial<Record<PadControl, Side>> = { a: 'below', dpdown: 'below', b: 'right', dpright: 'right', x: 'left', dpleft: 'left' }
+
+/**
+ * A pixel arrow: next to a control to press, pointing at it from the outside
+ * of its cluster; beside a stick to push, pointing the way. It bounces a pixel
+ * at a time, towards where it points.
+ */
+function Arrow({ pointer, layers }: { pointer: Pointer; layers: { control: PadControl | null; box: { x0: number; y0: number; x1: number; y1: number } }[] }) {
+  const hits = layers.filter((l) => l.control === pointer.control)
+  if (!hits.length) return null
+  const box = {
+    x0: Math.min(...hits.map((h) => h.box.x0)),
+    y0: Math.min(...hits.map((h) => h.box.y0)),
+    x1: Math.max(...hits.map((h) => h.box.x1)),
+    y1: Math.max(...hits.map((h) => h.box.y1)),
+  }
+  const cx = Math.round((box.x0 + box.x1) / 2)
+  const cy = Math.round((box.y0 + box.y1) / 2)
+  // Pushing a stick: the arrow sits on that side and points away. Pressing:
+  // it sits outside the control and points at it.
+  const side: Side = pointer.way === 'right' ? 'right' : pointer.way === 'down' ? 'below' : (ARROW_SIDE[pointer.control] ?? 'above')
+  const push = pointer.way !== 'press'
+  const glyph =
+    side === 'above' ? ARROWS.down
+    : side === 'below' ? (push ? ARROWS.down : ARROWS.up)
+    : side === 'right' ? (push ? ARROWS.right : ARROWS.left)
+    : ARROWS.right
+  const w = glyph[0]!.length
+  const h = glyph.length
+  const [x, y] =
+    side === 'above' ? [cx - Math.floor(w / 2), Math.max(-2, box.y0 - h - 2)]
+    : side === 'below' ? [cx - Math.floor(w / 2), box.y1 + 3]
+    : side === 'right' ? [box.x1 + 3, cy - Math.floor(h / 2)]
+    : [box.x0 - w - 2, cy - Math.floor(h / 2)]
+  // One pixel towards where it points.
+  const pointsDown = glyph === ARROWS.down
+  const pointsUp = glyph === ARROWS.up
+  const pointsRight = glyph === ARROWS.right
+  const step = pointsDown ? '0 1' : pointsUp ? '0 -1' : pointsRight ? '1 0' : '-1 0'
+  return (
+    <g transform={`translate(${x} ${y})`} fill="var(--pad-focus, var(--primary))" pointerEvents="none">
+      <g>
+        <animateTransform attributeName="transform" type="translate" values={`0 0;${step};0 0`} dur="0.84s" calcMode="discrete" repeatCount="indefinite" />
+        {glyph.flatMap((row, r) => [...row].map((c, col) => (c === '#' ? <rect key={`${col}-${r}`} x={col} y={r} width={1} height={1} /> : null)))}
+      </g>
+    </g>
   )
 }
 

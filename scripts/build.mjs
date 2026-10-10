@@ -28,6 +28,15 @@ const remaps = [
 const flags = remaps.map(([from, to]) => `--remap-path-prefix=${from}=${to}`).join(' ')
 const env = { ...process.env, RUSTFLAGS: [process.env.RUSTFLAGS, flags].filter(Boolean).join(' ') }
 
+// C code built from source (SDL2, through sdl2-sys) keeps __FILE__ paths in
+// its asserts, and RUSTFLAGS never reach a C compiler. The C equivalent of the
+// remap: MSVC trims a prefix off __FILE__, GCC and Clang map it.
+const msvc = /msvc/.test(spawnSync('rustc', ['-vV'], { encoding: 'utf8' }).stdout || '')
+const cflags = msvc
+  ? remaps.map(([from]) => `/d1trimfile:${from}${path.sep}`).join(' ')
+  : remaps.map(([from, to]) => `-ffile-prefix-map=${from}=${to}`).join(' ')
+env.CFLAGS = [process.env.CFLAGS, cflags].filter(Boolean).join(' ')
+
 // On Windows the build must not see Git's MSYS tools: in a bash step they
 // sit ahead of everything on PATH, so OpenSSL's Configure finds MSYS perl
 // (missing modules it needs) and the linker resolves to MSYS `link` instead

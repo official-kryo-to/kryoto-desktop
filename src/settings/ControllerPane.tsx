@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BatteryCharging, BatteryMedium, Gamepad2, RotateCcw, Vibrate } from 'lucide-react'
-import { Button, Caption, Check, Section, Segmented } from '@/ui'
+import { Button, Caption, Check, Matrix, Section, Segmented } from '@/ui'
 import { PadArtView, PadBadge, type Callout } from '@/controller/PadArtView'
+import { PadSetup } from '@/controller/PadSetup'
+import { openExternal } from '@/lib/window'
 import { savePadConfig, usePadInput, usePadStore } from '@/hooks/usePads'
 import { isWindowsHost } from '@/lib/library'
 import {
@@ -15,6 +17,7 @@ import {
   padApi,
   padLabel,
   REMAPPABLE,
+  VIRTUAL_DRIVER_URL,
   type PadConfig,
   type PadInfo,
   type PadPrefs,
@@ -26,12 +29,14 @@ import { cn } from '@/lib/utils'
  * Settings > Controller (kryo.to feature flag `controller`): the pads that are
  * plugged in or were before, drawn as they look and lit up as you press, what
  * each button is called on it, which job it does in games, and how the pad
- * moves around Kryoto.
+ * moves around Kryoto. A pad Kryoto does not know (or reads wrong) is set up
+ * here, one button at a time (PadSetup).
  */
 
 const MATCHED: Record<PadInfo['model']['matched'], string> = {
   ids: 'recognized by its USB ids',
   name: 'recognized by its name',
+  maker: 'recognized by its maker',
   fallback: 'not recognized, drawn as a universal pad',
 }
 
@@ -39,21 +44,25 @@ export function ControllerPane() {
   const { pads, config, requested } = usePadStore()
   const known = useMemo(() => {
     // Plugged in first, then the ones seen before.
-    const list: { guid: string; pad: PadInfo | null; name: string }[] = pads.map((p) => ({ guid: p.guid, pad: p, name: p.model.name }))
+    const list: { guid: string; pad: PadInfo | null; name: string }[] = pads.map((p) => ({ guid: p.guid, pad: p, name: p.name }))
     for (const [guid, prefs] of Object.entries(config?.pads ?? {}))
       if (!list.some((k) => k.guid === guid)) list.push({ guid, pad: null, name: prefs.name || 'Controller' })
     return list
   }, [pads, config])
 
   const [chosen, setChosen] = useState<string | null>(null)
+  const [setup, setSetup] = useState(false)
   const [preview, setPreview] = useState<PadFamily>('xbox')
   const current = known.find((k) => k.guid === chosen) ?? known[0] ?? null
   // "Configure" on a pad's notification opens this page on that pad.
   useEffect(() => {
-    if (requested) setChosen(requested.guid)
-  }, [requested])
+    if (!requested) return
+    setChosen(requested.guid)
+    // A pad whose buttons Kryoto does not know goes straight to its setup.
+    if (pads.some((p) => p.guid === requested.guid && !p.mapped)) setSetup(true)
+  }, [requested, pads])
 
-  const prefs: PadPrefs = (current && config?.pads[current.guid]) || { name: current?.name ?? '', family: null, remap: {}, sdl: null }
+  const prefs: PadPrefs = (current && config?.pads[current.guid]) || { name: current?.name ?? '', family: null, remap: {}, mapping: null, base: null, sdl: null }
   const family = current ? familyOf(current.pad, prefs) : preview
   const { pressed, axes, last, clearLast } = usePadInput(current?.pad?.id ?? null)
   const [hover, setHover] = useState<PadControl | null>(null)
@@ -74,9 +83,19 @@ export function ControllerPane() {
     const next: PadConfig = { ...config, pads: { ...config.pads, [current.guid]: { ...prefs, ...patch } } }
     void savePadConfig(next).catch(() => {})
   }
-  const setFlag = (key: 'navigate' | 'notify' | 'games' | 'haptics', v: boolean) => config && void savePadConfig({ ...config, [key]: v }).catch(() => {})
+  const setFlag = (key: 'navigate' | 'notify' | 'games' | 'haptics' | 'virtualPad', v: boolean) => config && void savePadConfig({ ...config, [key]: v }).catch(() => {})
   const windows = isWindowsHost()
   const name = (c: PadControl) => padLabel(family, c).long
+  const pad = current?.pad ?? null
+  const unknown = !!pad && !pad.mapped
+  // Windows: is the virtual-controller driver there?
+  const [driver, setDriver] = useState<boolean | null>(null)
+  const checkDriver = () => void padApi.virtualDriver().then(setDriver).catch(() => setDriver(false))
+  useEffect(() => {
+    if (windows) checkDriver()
+  }, [windows])
+  const forgetSetup = () =>
+    pad && void padApi.saveSetup(pad.guid, pad.name, null).then((c) => savePadConfig(c)).catch(() => {})
 
   return (
     <>
@@ -114,6 +133,21 @@ export function ControllerPane() {
           </p>
         )}
 
+        {unknown ? (
+          <div className="kryo-radius flex flex-wrap items-center gap-4 border border-primary/50 bg-primary/5 p-4">
+            <Matrix state="wait" className="size-5 text-primary" />
+            <div className="min-w-0 grow">
+              <p className="text-sm font-bold text-foreground">Kryoto does not know this controller&apos;s buttons yet</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Set it up once: press each button when it asks. About a minute, and then Kryoto and your games read it right.
+              </p>
+            </div>
+            <Button variant="primary" size="sm" onClick={() => setSetup(true)}>
+              Set up controller
+            </Button>
+          </div>
+        ) : null}
+
         <div
           className="kryo-radius relative grid justify-items-center gap-3 border border-border bg-card/40 px-6 pb-5 pt-6"
           // A soft light behind the pad, so a black controller reads on a black page.
@@ -126,8 +160,8 @@ export function ControllerPane() {
             focus={focus}
             onHover={setHover}
             names={name}
-            callouts={callouts(family, prefs.remap, !windows && !!current)}
-            className={cn('max-w-[960px]', !current?.pad && 'opacity-80')}
+            callouts={callouts(family, prefs.remap, !!current)}
+            className={cn('max-w-[960px]', (!current?.pad || unknown) && 'opacity-60')}
           />
           <p className="min-h-4 text-center text-xs text-muted-foreground" aria-live="polite">
             {focus ? (
@@ -137,16 +171,32 @@ export function ControllerPane() {
                   ? `, acts as ${padLabel(family, actsAs(prefs.remap, focus)).long} in games`
                   : null}
               </>
+            ) : unknown ? (
+              'Set it up first: until then Kryoto cannot tell its buttons apart.'
             ) : current?.pad ? (
-              `${current.pad.model.name}, ${MATCHED[current.pad.model.matched]}. Press a button to find it.`
+              `${current.pad.name}, ${current.pad.custom ? 'set up here' : MATCHED[current.pad.model.matched]}. Press a button to find it.`
             ) : current ? (
               'Not connected. Its settings are kept for when it is back.'
             ) : (
               'How each kind of controller is drawn and named.'
             )}
           </p>
+          {pad && !unknown ? (
+            <p className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+              <span>Buttons not right?</span>
+              <button type="button" className="font-bold text-foreground underline-offset-2 hover:underline" onClick={() => setSetup(true)}>
+                Set up this controller again
+              </button>
+              {pad.custom ? (
+                <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" onClick={forgetSetup}>
+                  Use the standard setup
+                </button>
+              ) : null}
+            </p>
+          ) : null}
         </div>
       </div>
+      {setup && pad ? <PadSetup pad={pad} family={family} onClose={() => setSetup(false)} /> : null}
 
       <Section title="Layout" hint="Which buttons this controller has printed on it. Picked from the controller itself; change it if a pad pretends to be another (many PC pads say they are Xbox ones).">
         {current ? (
@@ -176,7 +226,7 @@ export function ControllerPane() {
         title="Buttons"
         hint={
           windows
-            ? 'What each button is called on this controller. On Windows, games read controllers themselves, so changing what a button does in games works on Linux only for now.'
+            ? 'What each button does in games. Give a button another job and the button that had it takes over the old one. Games get it through the virtual Xbox controller (below).'
             : 'What each button does in games. Give a button another job and the button that had it takes over the old one. SDL games, Wine and Proton all follow this.'
         }
       >
@@ -194,7 +244,7 @@ export function ControllerPane() {
               >
                 <PadBadge family={family} control={c} label={padLabel(family, c).long} />
                 <span className="min-w-0 grow truncate text-xs text-foreground">{padLabel(family, c).long}</span>
-                {windows || !current ? null : (
+                {!current ? null : (
                   <select
                     aria-label={`${padLabel(family, c).long} acts as`}
                     value={job}
@@ -215,18 +265,61 @@ export function ControllerPane() {
             )
           })}
         </div>
-        {!windows && current && !isIdentity(prefs.remap) ? (
+        {current && !isIdentity(prefs.remap) ? (
           <div className="flex flex-wrap items-center gap-3">
             <Button size="sm" variant="ghost" onClick={() => setPrefs({ remap: {} })}>
               <RotateCcw className="size-3.5" />
               Reset all buttons
             </Button>
-            {current.pad && !prefs.sdl ? (
-              <span className="text-[11px] text-warning">This controller is not in SDL&apos;s list, so games cannot be given these changes yet.</span>
+            {!windows && current.pad && !prefs.sdl ? (
+              <span className="text-[11px] text-warning">Set this controller up first, so games can be given these changes.</span>
             ) : null}
           </div>
         ) : null}
       </Section>
+
+      {config ? (
+        <Section
+          title="In games"
+          hint={
+            windows
+              ? 'While a game from your library runs, a controller that is not an Xbox one plays as a virtual Xbox controller, with its setup and button changes, rumble included. Every game that supports Xbox controllers then works with it.'
+              : 'Games get this controller’s setup and button changes: SDL games read them, and so do Wine and Proton.'
+          }
+        >
+          {windows ? (
+            <>
+              <Check checked={config.virtualPad} onChange={(v) => setFlag('virtualPad', v)} label="Play as an Xbox controller in games" />
+              {config.virtualPad ? (
+                driver ? (
+                  <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Matrix state="success" className="size-3.5 text-success" />
+                    The virtual-controller driver is installed.
+                  </p>
+                ) : driver === false ? (
+                  <div className="kryo-radius flex flex-wrap items-center gap-3 border border-border p-3">
+                    <Matrix state="unavailable" className="size-3.5 text-warning" />
+                    <p className="min-w-0 grow text-xs text-muted-foreground">
+                      This needs ViGEmBus, a free driver for virtual controllers that DS4Windows and similar tools use too. Install it once, then press Check again.
+                    </p>
+                    <Button size="sm" onClick={() => void openExternal(VIRTUAL_DRIVER_URL)}>
+                      Get the driver
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={checkDriver}>
+                      Check again
+                    </Button>
+                  </div>
+                ) : null
+              ) : null}
+              {pad?.xinput ? (
+                <p className="text-[11px] text-muted-foreground">This is an Xbox controller: games read it as it is, so it does not need the virtual one.</p>
+              ) : null}
+            </>
+          ) : (
+            <Check checked={config.games} onChange={(v) => setFlag('games', v)} label="Give games my setup and button changes" />
+          )}
+        </Section>
+      ) : null}
 
       {config ? (
         <Section title="Using a controller">
@@ -235,7 +328,6 @@ export function ControllerPane() {
             <Check checked={config.haptics} onChange={(v) => setFlag('haptics', v)} label="Feel it in the controller as the selection moves (a light rumble)" />
           ) : null}
           <Check checked={config.notify} onChange={(v) => setFlag('notify', v)} label="Ask to set up a controller the first time it is connected" />
-          {windows ? null : <Check checked={config.games} onChange={(v) => setFlag('games', v)} label="Give games my button changes" />}
           {config.navigate ? <NavLegend family={family} /> : null}
         </Section>
       ) : null}

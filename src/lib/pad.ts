@@ -13,21 +13,35 @@ export type PadModel = {
   /** "DualSense", "Xbox Series X|S Controller", or what the pad calls itself. */
   name: string
   features: { touchpad: boolean; gyro: boolean; paddles: number; misc: boolean; analogTriggers: boolean }
-  /** How it was told: by its USB ids, by its name, or not at all. */
-  matched: 'ids' | 'name' | 'fallback'
+  /** How it was told: by its USB ids, by its name, by its maker, or not at all. */
+  matched: 'ids' | 'name' | 'maker' | 'fallback'
 }
 
 export type PadInfo = {
+  /** SDL's instance id: this connection's. */
   id: number
   /** SDL's GUID: one per model; settings are kept under it. */
   guid: string
+  /** The name to show (the maker's when the system gave a placeholder). */
   name: string
+  /** What the system calls it ("HID-compliant game controller"). */
+  systemName: string
   vendor: number | null
   product: number | null
   model: PadModel
+  /** Its buttons are known (SDL's database, or a setup saved here). */
+  mapped: boolean
+  /** Its buttons come from a setup saved here. */
+  custom: boolean
+  /** An Xbox pad: Windows games read it as it is. */
+  xinput: boolean
   rumble: boolean
   battery: number | null
   charging: boolean
+  /** What the setup can listen to. */
+  buttons: number
+  axes: number
+  hats: number
 }
 
 /** physical control -> the control it acts as; missing ones act as themselves. */
@@ -38,7 +52,11 @@ export type PadPrefs = {
   /** Drawn and named as this family instead of the detected one. */
   family: PadFamily | null
   remap: PadRemap
-  /** The SDL mapping games get (Linux), written by the native side. */
+  /** The setup saved here (an SDL mapping), when there is one. */
+  mapping: string | null
+  /** SDL's own mapping for it, as last seen. */
+  base: string | null
+  /** The SDL mapping games get, written by the native side. */
   sdl: string | null
 }
 
@@ -49,6 +67,8 @@ export type PadConfig = {
   games: boolean
   /** Feel the selection move (light rumble). */
   haptics: boolean
+  /** Windows: play as a virtual Xbox controller while a game runs. */
+  virtualPad: boolean
   pads: Record<string, PadPrefs>
 }
 
@@ -56,6 +76,14 @@ export type PadConfig = {
 export type PadHaptic = 'tick' | 'select' | 'edge'
 
 export type PadButtonEvent = { id: number; control: PadControl; pressed: boolean }
+/** A raw input during the setup: a button (1 down, 0 up), an axis (-1..1) or a hat (direction bits). */
+export type PadRawEvent = { id: number; kind: 'button' | 'axis' | 'hat'; index: number; value: number }
+/** Where every raw axis and hat rests when the setup starts listening. */
+export type PadRawState = { id: number; axes: number[]; hats: number[] }
+
+/** The free driver Windows needs for the virtual Xbox controller. */
+export const VIRTUAL_DRIVER_URL = 'https://github.com/nefarius/ViGEmBus/releases/latest'
+
 export type PadAxesEvent = { id: number; lx: number; ly: number; rx: number; ry: number; lt: number; rt: number }
 
 export const padApi = {
@@ -66,6 +94,13 @@ export const padApi = {
   save: (config: PadConfig) => call<PadConfig>('pad_config_set', { config }),
   rumble: (id: number) => call<void>('pad_rumble', { id }),
   haptic: (id: number, kind: PadHaptic) => call<void>('pad_haptic', { id, kind }),
+  /** Listen to one pad's raw inputs (`pad-raw`), for the setup; `null` stops. */
+  capture: (id: number | null) => call<void>('pad_capture', { id }),
+  /** Save a setup (SDL field -> source), or forget it with `null`. */
+  saveSetup: (guid: string, name: string, bindings: Record<string, string> | null) =>
+    call<PadConfig>('pad_mapping_set', { guid, name, bindings }),
+  /** Windows: is the virtual-controller driver installed? */
+  virtualDriver: () => call<boolean>('pad_virtual_driver'),
 }
 
 /* ── Names ─────────────────────────────────────────────── */

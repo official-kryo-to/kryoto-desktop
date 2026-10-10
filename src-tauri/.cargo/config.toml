@@ -1,0 +1,9 @@
+# SDL2 is built from source (sdl2's `bundled` feature, pad.rs).
+[env]
+# Its CMakeLists predates CMake 4, which refuses a minimum version below 3.5
+# unless told which policies to use.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# GCC 15 and later default to C23, where `bool` and `false` are keywords that
+# SDL2's C code defines itself; MinGW builds pin C17. MSVC and the Linux
+# runners' GCC are unaffected.
+CFLAGS_x86_64_pc_windows_gnu = "-std=gnu17"

@@ -1,6 +1,6 @@
 [package]
 name = "kryoto-desktop"
-version = "0.2.9"
+version = "0.2.10"
 description = "Kryoto's native desktop launcher shell."
 authors = ["Kryoto"]
 license = "MIT"
@@ -32,12 +32,13 @@ percent-encoding = "2"
 notify-rust = "4"
 tauri-plugin-updater = "2.13"
 tauri-plugin-process = "2.4"
-# Controllers (kryo.to feature flag `controller`): gilrs reads them (Windows
-# Gaming Input, Linux evdev) and kryoto-padmap, our own open-source resolver,
-# says which pad it is, what its buttons are called and how a remap reaches
-# games. Path dependency while the repos sit side by side, like
+# Controllers (kryo.to feature flag `controller`): SDL2, built from source and
+# linked in, reads them (the library Steam and most games use, with the
+# SDL_GameControllerDB built in), and kryoto-padmap, our own open-source
+# resolver, says which pad it is, what its buttons are called and how a remap
+# reaches games. Path dependency while the repos sit side by side, like
 # kryoto-messaging; CI checks it out next to this repo.
-gilrs = "0.11"
+sdl2 = { version = "0.38", features = ["bundled", "static-link"] }
 padmap = { path = "../../kryoto-padmap", features = ["serde", "sdl-db"] }
 
 # Chat (FRIENDS-AND-CHAT.md). All cryptography lives in kryoto-messaging; this
@@ -68,6 +69,8 @@ sqlcipher = ["km-store-sqlcipher/sqlcipher"]
 dev-plain-chat-store = ["km-store-sqlcipher/plain-sqlite-dev"]
 
 [target.'cfg(windows)'.dependencies]
+# The virtual Xbox controller games see a set-up pad as (pad.rs, ViGEmBus).
+vigem-client = { version = "0.1", features = ["unstable_xtarget_notification"] }
 webview2-com = "0.39"
 windows = { version = "0.62", default-features = false }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }

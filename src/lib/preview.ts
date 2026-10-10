@@ -497,18 +497,47 @@ const HANDLERS: Record<string, (a: Record<string, unknown>) => unknown> = {
   },
 }
 
-/** Controllers: a DualSense plugged in, an Xbox pad seen before. */
+/**
+ * Controllers: a DualSense SDL knows, and a SteelSeries pad it does not (as
+ * Windows reports one: a placeholder name and no mapping), which the setup
+ * is for. An Xbox pad was seen before.
+ */
 const previewPads = [
   {
     id: 0,
     guid: '030000004c050000e60c000011810000',
-    name: 'Sony Interactive Entertainment DualSense Wireless Controller',
+    name: 'DualSense',
+    systemName: 'PS5 Controller',
     vendor: 0x054c,
     product: 0x0ce6,
     model: { family: 'playstation', name: 'DualSense', features: { touchpad: true, gyro: true, paddles: 0, misc: true, analogTriggers: true }, matched: 'ids' },
+    mapped: true,
+    custom: false,
+    xinput: false,
     rumble: true,
     battery: 80,
     charging: false,
+    buttons: 15,
+    axes: 6,
+    hats: 0,
+  },
+  {
+    id: 1,
+    guid: '03008231110100003414000000000000',
+    name: 'SteelSeries controller',
+    systemName: 'As: 6 knop: 16 gamepad met kapschakelaar',
+    vendor: 0x0111,
+    product: 0x1434,
+    model: { family: 'xbox', name: 'SteelSeries controller', features: { touchpad: false, gyro: false, paddles: 0, misc: false, analogTriggers: true }, matched: 'maker' },
+    mapped: false,
+    custom: false,
+    xinput: false,
+    rumble: false,
+    battery: null,
+    charging: false,
+    buttons: 16,
+    axes: 6,
+    hats: 1,
   },
 ]
 let previewPadConfig = {
@@ -517,10 +546,12 @@ let previewPadConfig = {
   notify: true,
   games: true,
   haptics: true,
+  virtualPad: true,
   pads: {
-    '030000004c050000e60c000011810000': { name: 'DualSense', family: null, remap: {}, sdl: null },
-    '030000005e040000120b00000b050000': { name: 'Xbox Series X|S Controller', family: null, remap: { a: 'b', b: 'a' }, sdl: null },
-  } as Record<string, unknown>,
+    '030000004c050000e60c000011810000': { name: 'DualSense', family: null, remap: {}, mapping: null, base: null, sdl: null },
+    '03008231110100003414000000000000': { name: 'SteelSeries controller', family: null, remap: {}, mapping: null, base: null, sdl: null },
+    '030000005e040000120b00000b050000': { name: 'Xbox Series X|S Controller', family: null, remap: { a: 'b', b: 'a' }, mapping: null, base: null, sdl: null },
+  } as Record<string, Record<string, unknown>>,
 }
 Object.assign(HANDLERS, {
   pad_start: () => previewPads,
@@ -530,6 +561,24 @@ Object.assign(HANDLERS, {
   pad_config_set: (a: Record<string, unknown>) => (previewPadConfig = a.config as typeof previewPadConfig),
   pad_rumble: () => null,
   pad_haptic: () => null,
+  pad_capture: (a: Record<string, unknown>) => {
+    if (a.id != null) setTimeout(() => previewBus.emit('pad-raw-state', { id: a.id, axes: [0, 0, 0, 0, -1, -1], hats: [0] }), 30)
+    return null
+  },
+  pad_mapping_set: (a: Record<string, unknown>) => {
+    const guid = String(a.guid)
+    const prefs = previewPadConfig.pads[guid] ?? {}
+    const line = a.bindings ? `${guid},${String(a.name)},${Object.entries(a.bindings as Record<string, string>).map(([k, v]) => `${k}:${v}`).join(',')},` : null
+    previewPadConfig = { ...previewPadConfig, pads: { ...previewPadConfig.pads, [guid]: { ...prefs, mapping: line } } }
+    const pad = previewPads.find((p) => p.guid === guid)
+    if (pad) {
+      pad.mapped = !!line || pad.id === 0
+      pad.custom = !!line
+      previewBus.emit('pad-list', clone(previewPads))
+    }
+    return previewPadConfig
+  },
+  pad_virtual_driver: () => false,
   // Repair (src-tauri/src/repair.rs): the shared source list, nothing applied yet.
   repair_sources: () => [
     { id: 'gbe_fork', label: 'gbe_fork', online: false },
