@@ -49,6 +49,7 @@ pub struct Pads {
 
 enum Req {
     Start,
+    #[cfg(windows)]
     Refresh,
     Stop,
     Rumble(u32),
@@ -875,9 +876,9 @@ fn run<R: Runtime>(app: &AppHandle<R>, rx: mpsc::Receiver<Req>, back: mpsc::Send
                     r.close_all();
                 }
                 _ if !active => {}
+                #[cfg(windows)]
                 Req::Refresh => {
                     r.open_all();
-                    #[cfg(windows)]
                     r.virt.refresh_driver();
                 }
                 Req::Rumble(id) => r.rumble(id, 0xb000, 0xb000, 300),

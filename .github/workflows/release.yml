@@ -190,6 +190,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cd src-tauri
           cargo test --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # `app:build` is `tauri build` with the build machine's paths remapped out
       # of the binary, and it fails if any are still in it (scripts/build.mjs).
