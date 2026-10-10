@@ -913,6 +913,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
       />
       <NavBar
         current={currentTab}
+        overStore={storeVisible}
         tabs={tabs}
         canBack={canBack}
         canForward={canForward}

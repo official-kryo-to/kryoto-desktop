@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight } from 'lucide-react'
-import { IconButton, MenuList, useNativeOpen, type MenuEntry } from '@/ui'
+import { IconButton, MenuList, useDismiss, useNativeOpen, type MenuEntry } from '@/ui'
 import { isTauri } from '@/lib/bridge'
 import { closeMenu, onPopupHover, openMenu, popupOpen } from '@/lib/popup'
 import { cn } from '@/lib/utils'
@@ -18,8 +18,8 @@ export type NavTabSpec = {
  * Back / forward, then STORE · LIBRARY · COMMUNITY · <NAME> as kryo.to's
  * segmented pill - the white segment is where you are. Each tab opens its
  * section on click and shows its pages on hover, after a short pause so a
- * pointer sweeping across does not flash menus. The menus open in the menu
- * view, so they sit over the Store without stopping it. The right side
+ * pointer sweeping across does not flash menus. Local pages keep menus in
+ * the shell; over the Store they use the native menu view. The right side
  * carries whatever the current page adds: the Store's address, the Library's
  * actions.
  */
@@ -30,6 +30,7 @@ export function NavBar({
   canForward,
   onBack,
   onForward,
+  overStore = false,
   right,
 }: {
   current: TopTab
@@ -38,6 +39,8 @@ export function NavBar({
   canForward: boolean
   onBack: () => void
   onForward: () => void
+  /** Only the visible Store needs menus in a separate native web view. */
+  overStore?: boolean
   right?: ReactNode
 }) {
   return (
@@ -52,7 +55,7 @@ export function NavBar({
       </div>
       <div className="kryo-pill flex items-center gap-1 border border-border bg-card p-1">
         {tabs.map((t) => (
-          <NavTab key={t.id} tab={t} current={current === t.id} />
+          <NavTab key={t.id} tab={t} current={current === t.id} native={overStore && isTauri()} />
         ))}
       </div>
       <div className="flex min-w-0 grow items-center justify-end gap-2">{right}</div>
@@ -60,8 +63,7 @@ export function NavBar({
   )
 }
 
-function NavTab({ tab, current }: { tab: NavTabSpec; current: boolean }) {
-  const native = isTauri()
+function NavTab({ tab, current, native }: { tab: NavTabSpec; current: boolean; native: boolean }) {
   const menuId = `tab:${tab.id}`
   const [domOpen, setDomOpen] = useState(false)
   const nativeOpen = useNativeOpen(native ? menuId : undefined)
@@ -70,6 +72,12 @@ function NavTab({ tab, current }: { tab: NavTabSpec; current: boolean }) {
   const onTab = useRef(false)
   const inPopup = useRef(false)
   const button = useRef<HTMLButtonElement | null>(null)
+  const wrapper = useRef<HTMLDivElement | null>(null)
+  const closeLocal = () => {
+    setDomOpen(false)
+    if (wrapper.current?.contains(document.activeElement)) button.current?.focus({ preventScroll: true })
+  }
+  useDismiss(!native && domOpen, wrapper, closeLocal)
 
   const clear = () => {
     if (timer.current) window.clearTimeout(timer.current)
@@ -85,7 +93,7 @@ function NavTab({ tab, current }: { tab: NavTabSpec; current: boolean }) {
     clear()
     timer.current = window.setTimeout(() => {
       if (onTab.current || inPopup.current) return
-      if (!native) setDomOpen(false)
+      if (!native) closeLocal()
       else if (popupOpen() === menuId) closeMenu()
     }, delay)
   }
@@ -100,10 +108,16 @@ function NavTab({ tab, current }: { tab: NavTabSpec; current: boolean }) {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [native, menuId])
-  useEffect(() => clear, [])
+  useEffect(() => () => {
+    clear()
+    if (native && popupOpen() === menuId) closeMenu()
+  }, [native, menuId])
+  useEffect(() => { if (!open) inPopup.current = false }, [open])
+  useEffect(() => { setDomOpen(false) }, [native])
 
   return (
     <div
+      ref={wrapper}
       className="relative"
       onPointerEnter={() => {
         onTab.current = true
@@ -124,7 +138,14 @@ function NavTab({ tab, current }: { tab: NavTabSpec; current: boolean }) {
         type="button"
         data-menu={native ? menuId : undefined}
         aria-current={current ? 'page' : undefined}
+        aria-haspopup={tab.items.length ? 'menu' : undefined}
         aria-expanded={tab.items.length ? open : undefined}
+        onKeyDown={(e) => {
+          if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+          e.preventDefault()
+          clear()
+          show()
+        }}
         onClick={() => {
           clear()
           if (native) closeMenu()
@@ -141,9 +162,11 @@ function NavTab({ tab, current }: { tab: NavTabSpec; current: boolean }) {
       {!native && domOpen ? (
         <div
           role="menu"
-          className="kryo-pop kryo-radius absolute left-0 top-[calc(100%+8px)] z-[400] min-w-48 overflow-hidden border border-border bg-popover py-1 shadow-2xl shadow-black/60"
+          className="absolute left-0 top-full z-[400] min-w-48 pt-2"
         >
-          <MenuList items={tab.items} onDone={() => setDomOpen(false)} />
+          <div className="kryo-pop kryo-radius overflow-hidden border border-border bg-popover py-1 shadow-2xl shadow-black/60">
+            <MenuList items={tab.items} onDone={() => setDomOpen(false)} />
+          </div>
         </div>
       ) : null}
     </div>
