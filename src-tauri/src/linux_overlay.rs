@@ -74,8 +74,8 @@ fn wrap_shell(placed: &gtk::Widget) -> Option<gtk::Overlay> {
     vbox.remove(&shell);
     overlay.add(&shell);
     overlay.connect_get_child_position(|_, child| {
-        let name = child.widget_name().to_string();
-        let (x, y, w, h) = RECTS.with(|m| m.borrow().get(&name).copied())?;
+        let name = child.widget_name();
+        let (x, y, w, h) = RECTS.with(|m| m.borrow().get(name.as_str()).copied())?;
         Some(gtk::gdk::Rectangle::new(x, y, w, h))
     });
     vbox.pack_start(&overlay, true, true, 0);
