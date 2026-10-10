@@ -445,7 +445,8 @@ mod tests {
         assert!(p.lead_args[1].ends_with("Captain Hardcore.exe"));
         assert_eq!(p.game_args, "-nohmd");
         let env: std::collections::HashMap<_, _> = p.env.iter().cloned().collect();
-        assert_eq!(env["WINEDLLOVERRIDES"], "steam_api64=n,b;kryotoO=n,b;photon_universal=n,b");
+        // Kryoto Online covers 32-bit games too (steam_api, kryotoO32).
+        assert_eq!(env["WINEDLLOVERRIDES"], "steam_api64=n,b;steam_api=n,b;kryotoO=n,b;kryotoO32=n,b;photon_universal=n,b");
         assert_eq!(env["WINEPREFIX"], "/data/prefixes/captain-hardcore");
     }
 
