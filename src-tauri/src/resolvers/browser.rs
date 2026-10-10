@@ -148,6 +148,7 @@ fn site_of(url: &Url) -> String {
 /// Sites a mirror's page may load scripts and pictures from besides its own:
 /// the checks hosts put in front of their files, and the public code CDNs pages
 /// load libraries from. Everything else is somebody else's ads.
+#[cfg(any(windows, test))]
 const THIRD_PARTY_OK: &[&str] = &[
     "challenges.cloudflare.com",
     "hcaptcha.com",
@@ -176,6 +177,7 @@ const THIRD_PARTY_OK: &[&str] = &[
 /// are never refused, so the file itself, the host's API and any frame always
 /// load. VikingFile's page loads nothing from outside but Turnstile, so this
 /// changes nothing it needs.
+#[cfg(any(windows, test))]
 fn blocked(page_site: &str, request: &str) -> bool {
     let Ok(u) = request.parse::<Url>() else { return false };
     if !matches!(u.scheme(), "http" | "https") {
