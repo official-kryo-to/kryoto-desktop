@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Bridge isolation</title></head><body><output id="result">Starting</output><script type="module">
+const mode = new URLSearchParams(location.search).get('mode')
+let intervals = 0
+let cleared = 0
+const original = window.setInterval.bind(window)
+const clear = window.clearInterval.bind(window)
+const simulationIds = new Set()
+window.setInterval = (...args) => {
+  const id = original(...args)
+  if (args[1] === 500) { intervals++; simulationIds.add(id) }
+  return id
+}
+window.clearInterval = (...args) => { if (simulationIds.has(args[0])) { cleared++; simulationIds.delete(args[0]) }; return clear(...args) }
+if (mode === 'native') window.__TAURI_INTERNALS__ = { invoke: async () => 'native', transformCallback: () => 1 }
+const bridge = await import('/src/lib/bridge.ts')
+if (mode === 'web') bridge.useWebBackend({ call: async () => 'web', on: () => () => {} })
+const result = await bridge.call('settings_get')
+await bridge.call('settings_get')
+await bridge.on('fixture', () => {})
+if (mode === 'preview') {
+  const preview = await import('/src/lib/preview.ts')
+  preview.stopPreview()
+}
+window.bridgeResult = { mode, result, intervals, cleared }
+document.getElementById('result').textContent = 'Ready'
+</script></body></html>

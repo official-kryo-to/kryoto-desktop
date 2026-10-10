@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { errorText } from '@/lib/bridge'
 import { library, type LibraryGame } from '@/lib/library'
 
@@ -10,8 +10,29 @@ import { library, type LibraryGame } from '@/lib/library'
 export function useLibrary() {
   const [games, setGames] = useState<LibraryGame[]>([])
   const [running, setRunning] = useState<Set<string>>(new Set())
+  /**
+   * Pressed Play, process not there yet.
+   *
+   * Before the game's process exists the client finds its exe, picks the
+   * Proton or Wine to run it with and writes the start of its log; on Linux,
+   * with a prefix to set up, that is seconds. The Play button used to sit
+   * there until the process appeared, which read as a press that did nothing,
+   * so the game counts as running from the press. The process's own
+   * `game-state` takes over when it comes.
+   */
+  const [starting, setStarting] = useState<Set<string>>(new Set())
+  /** Stop was pressed before the process existed: stop it as soon as it does. */
+  const stopWhenUp = useRef<Set<string>>(new Set())
+  const without = (set: Set<string>, id: string) => {
+    if (!set.has(id)) return set
+    const next = new Set(set)
+    next.delete(id)
+    return next
+  }
   const [loaded, setLoaded] = useState(false)
   const [error, setErrorState] = useState<string | null>(null)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+  const generation = useRef(0)
   /**
    * The current error is an expected outcome to tell the player, not a fault
    * to report to kryo.to (Shell logs the rest).
@@ -23,15 +44,17 @@ export function useLibrary() {
   }, [])
 
   const reload = useCallback(async () => {
+    const request = ++generation.current
     try {
       const [list, live] = await Promise.all([library.list(), library.running()])
+      if (request !== generation.current) return
       setGames(list)
       setRunning(new Set(live))
-      setError(null)
+      setRefreshError(null)
     } catch (e) {
-      setError(errorText(e))
+      if (request === generation.current) setRefreshError(errorText(e))
     } finally {
-      setLoaded(true)
+      if (request === generation.current) setLoaded(true)
     }
   }, [])
 
@@ -63,6 +86,8 @@ export function useLibrary() {
           else next.delete(event.id)
           return next
         })
+        setStarting((current) => without(current, event.id))
+        if (event.running && stopWhenUp.current.delete(event.id)) void library.stop(event.id).catch(() => {})
         if (!event.running) {
           void reload()
           // A game gone within seconds almost never ran - say so instead of
@@ -85,20 +110,37 @@ export function useLibrary() {
 
   const play = useCallback(async (id: string, entry: number | null, joinLobby?: string) => {
     setError(null)
+    setStarting((current) => new Set(current).add(id))
     try {
       await library.launch(id, entry, joinLobby)
+      // A launch that went through always reports its process; one that
+      // somehow did not must not leave the button on Running for good.
+      window.setTimeout(() => {
+        setStarting((current) => {
+          if (!current.has(id)) return current
+          void reload()
+          return without(current, id)
+        })
+      }, 20_000)
     } catch (e) {
+      // It never started: back to Play, and say why.
+      setStarting((current) => without(current, id))
+      stopWhenUp.current.delete(id)
       setError(errorText(e))
     }
-  }, [])
+  }, [reload])
 
   const stopGame = useCallback(async (id: string) => {
+    if (starting.has(id) && !running.has(id)) {
+      stopWhenUp.current.add(id)
+      return
+    }
     try {
       await library.stop(id)
     } catch (e) {
       setError(errorText(e))
     }
-  }, [])
+  }, [starting, running])
 
   const upsert = useCallback((game: LibraryGame) => {
     setGames((list) => {
@@ -112,7 +154,10 @@ export function useLibrary() {
 
   const drop = useCallback((id: string) => setGames((list) => list.filter((g) => g.id !== id)), [])
 
-  return { games, running, loaded, error, errorQuiet, setError, reload, play, stop: stopGame, upsert, drop }
+  // Starting counts as running everywhere the client shows it.
+  const live = useMemo(() => (starting.size ? new Set([...running, ...starting]) : running), [running, starting])
+
+  return { games, running: live, loaded, error: error ?? refreshError, errorQuiet: error ? errorQuiet : false, setError, reload, play, stop: stopGame, upsert, drop }
 }
 
 /**

@@ -118,7 +118,8 @@ fn write_line(level: &str, scope: &str, message: &str) {
     }
 }
 
-fn queue(entry: Entry) {
+fn queue(mut entry: Entry) {
+    entry.message = redact_report(&entry.message).chars().take(4000).collect();
     if let Some(l) = LOGGER.get() {
         if let Ok(mut q) = l.queue.lock() {
             if q.len() < MAX_QUEUED {
@@ -126,6 +127,38 @@ fn queue(entry: Entry) {
             }
         }
     }
+}
+
+/// Redact at the outbound queue boundary, including recovered panic records.
+pub(crate) fn redact_report(message: &str) -> String {
+    static URLS: OnceLock<regex::Regex> = OnceLock::new();
+    static FIELDS: OnceLock<regex::Regex> = OnceLock::new();
+    static BEARER: OnceLock<regex::Regex> = OnceLock::new();
+    static COOKIES: OnceLock<regex::Regex> = OnceLock::new();
+    let urls = URLS.get_or_init(|| regex::Regex::new(r#"(?i)https?://[^\s<>\"']+"#).expect("report URL regex"));
+    let fields = FIELDS.get_or_init(|| regex::Regex::new(r#"(?i)\b(password|token|secret|api[_-]?key|authorization)"?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)"#).expect("report field regex"));
+    let bearer = BEARER.get_or_init(|| regex::Regex::new(r"(?i)\bbearer\s+[^\s,;]+").expect("report bearer regex"));
+    let cookies = COOKIES.get_or_init(|| regex::Regex::new(r#"(?i)\bcookie"?\s*[:=][^\r\n]*"#).expect("report cookie regex"));
+    let mut text = urls.replace_all(message, |captures: &regex::Captures<'_>| {
+        let Ok(mut url) = url::Url::parse(&captures[0]) else { return "[redacted URL]".to_string() };
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_query(None);
+        url.set_fragment(None);
+        if url.path().starts_with("/d/") { url.set_path("/d/[redacted]"); }
+        url.to_string()
+    }).into_owned();
+    text = bearer.replace_all(&text, "Bearer [redacted]").into_owned();
+    text = fields.replace_all(&text, "$1=[redacted]").into_owned();
+    text = cookies.replace_all(&text, "Cookie: [redacted]").into_owned();
+    for name in ["USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA"] {
+        if let Ok(value) = std::env::var(name) {
+            if !value.is_empty() {
+                text = text.replace(&value, "~").replace(&value.replace('\\', "/"), "~");
+            }
+        }
+    }
+    text
 }
 
 pub fn info(scope: &str, message: &str) {
@@ -139,7 +172,7 @@ pub fn warn(scope: &str, message: &str) {
 /// Written to the log, and queued for kryo.to.
 pub fn error(scope: &str, message: &str) {
     write_line("error", scope, message);
-    queue(Entry { at: now(), level: "error".into(), scope: scope.into(), message: message.chars().take(4000).collect() });
+    queue(Entry { at: now(), level: "error".into(), scope: scope.into(), message: message.into() });
 }
 
 /// Send what is queued. Keeps it on failure for the next attempt.
@@ -262,6 +295,18 @@ pub async fn logs_send(app: AppHandle) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn outbound_reports_redact_credentials_and_signed_links() {
+        let input = "GET https://user:pw@dl.kryo.to/d/signed-secret?token=query-secret#fragment Authorization: Bearer abc123 password=hunter2 api_key=secret456";
+        let result = super::redact_report(input);
+        for secret in ["user:pw", "signed-secret", "query-secret", "fragment", "abc123", "hunter2", "secret456"] {
+            assert!(!result.contains(secret), "report retained {secret}: {result}");
+        }
+        assert!(result.contains("dl.kryo.to"));
+        let result = super::redact_report(r#"{"password":"a secret with spaces", "token":"json-secret"}
+Cookie: session=first-secret; refresh=second-secret"#);
+        for secret in ["a secret", "json-secret", "first-secret", "second-secret"] { assert!(!result.contains(secret), "{result}"); }
+    }
     #[test]
     fn stamps_read_as_dates() {
         assert_eq!(super::stamp(0), "1970-01-01 00:00:00Z");

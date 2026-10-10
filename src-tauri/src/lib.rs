@@ -428,6 +428,7 @@ const BROWSER_STATE_SCRIPT: &str = r#"
             radius: u.appearanceRadius || null,
             typeface: u.appearanceTypeface || null,
             nsfwBlur: u.appearanceNsfwBlur !== false,
+            nsfwHide: u.appearanceNsfwHide === true,
             motion: u.appearanceMotion || null
           }
         } : null });
@@ -478,10 +479,14 @@ const BROWSER_STATE_SCRIPT: &str = r#"
     try {
       const snap = await invoke('remote_snapshot');
       if (!snap || !snap.installId) return;
-      const taken = await post('/api/desktop/remote/take', { installId: snap.installId }).catch(() => null);
+      const taken = await post('/api/desktop/remote/take', { installId: snap.installId, protocol: 2 }).catch(() => null);
       let now = snap;
       if (taken && Array.isArray(taken.commands) && taken.commands.length) {
-        await invoke('remote_apply', { commands: taken.commands });
+        const results = await invoke('remote_apply', { commands: taken.commands });
+        for (const result of results || []) {
+          const command = taken.commands.find((c) => c.id === result.id);
+            if (command) await post('/api/desktop/remote/ack', { installId: snap.installId, id: result.id, leaseToken: command.leaseToken, ...(result.error ? { error: result.error, retryable: result.retryable !== false } : {}) });
+        }
         now = (await invoke('remote_snapshot')) || snap;
       }
       const body = JSON.stringify(now.downloads);
@@ -1003,6 +1008,9 @@ pub fn run() {
         .manage(chat::ChatState::default())
         .setup(move |app| {
             logging::init(app.handle());
+            if let Err(e) = storage::recover_move(app.handle()) {
+                logging::error("storage-recovery", &e);
+            }
             if let Some(how) = display_env::describe() {
                 logging::info("display", &how);
             }
@@ -1125,6 +1133,7 @@ pub fn run() {
             remote::remote_apply,
             game_logs::game_log_read,
             game_logs::game_logs_folder,
+            library::library_prefix_folder,
             display_env::display_state,
             display_env::display_set_mode,
             chat::chat_status,
@@ -1193,6 +1202,7 @@ pub fn run() {
             control_catalog,
             open_external,
             settings::settings_get,
+            settings::settings_recover,
             settings::settings_save,
             library::library_list,
             library::library_add,

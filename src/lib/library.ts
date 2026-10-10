@@ -204,6 +204,8 @@ export const gameLogs = {
   list: (id: string) => call<GameLogInfo[]>('game_logs', { id }),
   read: (id: string, name: string) => call<string>('game_log_read', { id, name }),
   folder: (id: string) => call<string>('game_logs_folder', { id }),
+  /** The game's Wine prefix on Linux; null on Windows or before its first start. */
+  prefix: (id: string) => call<string | null>('library_prefix_folder', { id }),
 }
 
 export const library = {

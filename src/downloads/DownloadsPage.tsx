@@ -17,12 +17,18 @@ export function DownloadsPage({
   onOpenGame,
   onStore,
   onDonate,
+  loading,
+  error,
+  onRetry,
 }: {
   list: Dl[]
   onOpenGame: (id: string) => void
   onStore: () => void
   /** kryo.to's donate page; absent for supporters, who are never asked. */
   onDonate: (() => void) | null
+  loading: boolean
+  error: string | null
+  onRetry: () => void
 }) {
   const current = list.find(isWorking)
   // In queue order, which the arrows change.
@@ -32,6 +38,11 @@ export function DownloadsPage({
   const done = list.filter((d) => d.status === 'installed' || d.status === 'canceled')
   const stopped = waiting.filter((d) => d.status === 'paused' || d.status === 'failed')
 
+  if (!list.length && (loading || error)) {
+    return <EmptyState art={INBOX} title={error ? 'Downloads unavailable' : 'Loading downloads'} body={error ?? 'Getting your download list.'}>
+      {error ? <Button onClick={onRetry}>Retry</Button> : null}
+    </EmptyState>
+  }
   if (list.length === 0) {
     return (
       <EmptyState art={INBOX} title="No downloads" body="Press Download on a game in the store. It installs itself and appears in your library.">
@@ -44,6 +55,7 @@ export function DownloadsPage({
 
   return (
     <div className="grid min-h-0 grow content-start gap-8 overflow-auto p-6">
+      {error ? <div role="alert" className="flex items-center gap-3 text-xs text-destructive"><p>{error}</p><Button size="sm" onClick={onRetry}>Retry</Button></div> : null}
       {onDonate ? <Donate onDonate={onDonate} /> : null}
       {current ? <Current d={current} /> : null}
       {waiting.length ? (
@@ -103,8 +115,7 @@ function Donate({ onDonate }: { onDonate: () => void }) {
     <section className="kryo-radius flex items-center gap-4 border border-primary/60 bg-primary/10 p-4">
       <HeartHandshake className="size-6 shrink-0 text-primary" aria-hidden />
       <p className="grow text-xs leading-relaxed text-muted-foreground">
-        <b className="text-foreground">We host our files on our own filehost for the best download speeds.</b> Sadly, storage is VERY
-        expensive. Please consider donating.
+        Donations help pay for Kryoto-hosted downloads.
       </p>
       <Button variant="primary" size="sm" onClick={onDonate}>
         <HeartHandshake className="size-3.5" />

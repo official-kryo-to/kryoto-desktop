@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Shell } from '@/shell/Shell'
 import { Splash, Welcome } from '@/boot/Boot'
-import { applyWindow, browserNavigate, isTauri, mountStore, rememberWindowSize, setStoreVisible, STORE_HOME } from '@/lib/window'
-import { applyLook, effectiveLook, useSettings } from '@/lib/settings'
-import { setShowAdult } from '@/lib/adult'
+import { applyWindow, browserNavigate, exitApp, isTauri, mountStore, rememberWindowSize, setStoreVisible, STORE_HOME } from '@/lib/window'
+import { applyLook, effectiveLook, settingsApi, useSettings } from '@/lib/settings'
+import { errorText } from '@/lib/bridge'
+import { Button } from '@/ui'
+import { setHideAdult, setShowAdult } from '@/lib/adult'
 import { GUEST, useAccount } from '@/hooks/useAccount'
 import { useBrowserPage } from '@/hooks/useBrowserPage'
 import { call } from '@/lib/bridge'
@@ -48,6 +50,7 @@ const ACCOUNT_WAIT_MS = 6000
  * welcome screen back.
  */
 export default function App() {
+  const [recoveryFailure, setRecoveryFailure] = useState<string | null>(null)
   const [phase, setPhase] = useState<Phase>('splash')
   const settings = useSettings()
   const account = useAccount()
@@ -69,6 +72,7 @@ export default function App() {
     const look = effectiveLook(settings, account)
     applyLook(look)
     setShowAdult(look.showAdult)
+    setHideAdult(look.hideAdult === true)
   }, [settings, account])
 
   useEffect(() => {
@@ -148,6 +152,16 @@ export default function App() {
   }, [phase])
 
   if (phase === 'splash') return <Splash onRevealed={() => setRevealed(true)} />
+  if (settings?.recoveryError) return <main className="grid h-screen place-items-center bg-background p-6 text-foreground">
+    <section role="alert" className="kryo-radius grid max-w-lg gap-4 border border-border bg-card p-6 text-sm">
+      <h1 className="text-lg font-bold">Recover your settings</h1>
+      <p>Your settings could not be read. The original file has been kept. Error reporting and playtime sharing are off.</p>
+      <p>Use defaults to save a backup of the original and choose fresh settings. To restore your own copy instead, close Kryoto and restore settings.json in its app data folder.</p>
+      {recoveryFailure ? <p className="text-destructive">{recoveryFailure}</p> : null}
+      <Button className="w-fit" onClick={() => { void settingsApi.recover().catch(e => setRecoveryFailure(errorText(e))) }}>Use defaults</Button>
+      <Button variant="outline" className="w-fit" onClick={() => void exitApp()}>Quit Kryoto</Button>
+    </section>
+  </main>
   if (phase === 'welcome' || (!account && !guest)) {
     return (
       <Welcome
@@ -160,10 +174,12 @@ export default function App() {
     )
   }
   return (
+    <>
     <Shell
       startPage={settings?.startPage === 'store' ? 'store' : 'library'}
       account={account ?? GUEST}
       browser={browser}
     />
+    </>
   )
 }

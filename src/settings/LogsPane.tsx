@@ -30,7 +30,7 @@ export function LogsPane({ sendReports, onSendReports }: { sendReports: boolean;
   const lines = text ? text.split('\n') : []
   return (
     <>
-      <Section title="Error reports" hint="Errors and crashes go to the kryo.to team with the app version, your OS and your username. Nothing else.">
+      <Section title="Error reports" hint="Sends error details, app version, OS, your signed-in username and a persistent app install ID to Kryoto. Error details may include game names and file paths.">
         <Check checked={sendReports} onChange={onSendReports} label="Send error reports to kryo.to" />
       </Section>
       <Section title="Log">

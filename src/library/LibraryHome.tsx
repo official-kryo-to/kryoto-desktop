@@ -145,7 +145,7 @@ export function LibraryHome({
                 type="button"
                 aria-label={`Play ${g.title}`}
                 onClick={() => onPlay(g)}
-                className="kryo-pill absolute bottom-3 right-3 grid size-11 translate-y-2 place-items-center bg-primary text-primary-foreground opacity-0 shadow-lg shadow-black/50 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100"
+                className="kryo-pill absolute bottom-3 right-3 grid size-11 min-h-[44px] min-w-[44px] translate-y-2 place-items-center bg-primary text-primary-foreground opacity-0 shadow-lg shadow-black/50 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100 focus-visible:translate-y-0 focus-visible:opacity-100 [@media(pointer:coarse)]:translate-y-0 [@media(pointer:coarse)]:opacity-100"
               >
                 <Play className="size-4 fill-current" />
               </button>

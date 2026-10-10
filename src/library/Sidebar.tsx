@@ -6,7 +6,7 @@ import { asciiTrack, Dropdown } from '@/ui'
 import { isActive, progressOf, type Download } from '@/lib/downloads'
 import type { LibraryGame } from '@/lib/library'
 import { cn } from '@/lib/utils'
-import { adultBlur, useShowAdult } from '@/lib/adult'
+import { adultBlur, useHideAdult, useShowAdult } from '@/lib/adult'
 import { STATUSES, STATUS_LABEL, useAdultFlags, type SavedEntry, type SavedStatus } from '@/hooks/useSaved'
 
 type Shelf = 'installed' | 'saved' | SavedStatus
@@ -86,6 +86,13 @@ export function Sidebar({
   )
   const missingSlugs = useMemo(() => shelfEntries.filter((e) => !bySlug.has(e.slug)).map((e) => e.slug), [shelfEntries, bySlug])
   const isAdult = useAdultFlags(missingSlugs)
+  // Hiding adult games on kryo.to leaves the ones saved there off this list
+  // too; one installed here stays, blurred, under Installed.
+  const hideAdult = useHideAdult()
+  const listed = useMemo(
+    () => (hideAdult ? shelfEntries.filter((e) => bySlug.has(e.slug) || !isAdult(e.slug)) : shelfEntries),
+    [hideAdult, shelfEntries, bySlug, isAdult],
+  )
   const count = (st: SavedStatus) => saved.filter((e) => e.status === st).length
   const shelfOptions = [
     { value: 'installed' as Shelf, label: 'On this PC', hint: String(games.length) },
@@ -137,8 +144,8 @@ export function Sidebar({
       <div className="min-h-0 grow overflow-auto px-2 pb-3">
         {shelf !== 'installed' ? (
           <>
-            <Group label={shelf === 'saved' ? 'On kryo.to' : STATUS_LABEL[shelf]} count={shelfEntries.length} />
-            {shelfEntries.map((e) => {
+            <Group label={shelf === 'saved' ? 'On kryo.to' : STATUS_LABEL[shelf]} count={listed.length} />
+            {listed.map((e) => {
               const game = bySlug.get(e.slug)
               const adult = game ? game.nsfw : isAdult(e.slug)
               const cover = game?.cover ?? (e.cover || null)
@@ -168,7 +175,7 @@ export function Sidebar({
                 </button>
               )
             })}
-            {shelfEntries.length === 0 ? <p className="px-2 py-3 text-xs text-muted-foreground">Nothing here.</p> : null}
+            {listed.length === 0 ? <p className="px-2 py-3 text-xs text-muted-foreground">Nothing here.</p> : null}
           </>
         ) : null}
         {shelf === 'installed' ? <Group label="All" count={games.length} /> : null}

@@ -6,7 +6,7 @@ import { ArrowUpRight, Clock, Eye, MessageSquare, RotateCw, ShieldCheck, Users }
 import { AsciiBar, Button, Caption, IconButton, Label, Matrix } from '@/ui'
 import { isTauri } from '@/lib/bridge'
 import { useFriends } from '@/hooks/useFriends'
-import { adultBlur, useShowAdult } from '@/lib/adult'
+import { adultBlur, useHideAdult, useShowAdult, withoutAdult } from '@/lib/adult'
 import type { LibraryGame } from '@/lib/library'
 import { formatPlaytime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -134,6 +134,7 @@ export function CommunityPage({ games, onGame, onProfile }: { games: LibraryGame
   const stats = useMemo(() => withoutHidden(shared, hiddenList ?? []), [shared, hiddenList])
   const [error, setError] = useState<string | null>(null)
   const showAdult = useShowAdult()
+  const hideAdult = useHideAdult()
   const online = useOnline()
 
   const load = useCallback(async (force = false) => {
@@ -228,7 +229,7 @@ export function CommunityPage({ games, onGame, onProfile }: { games: LibraryGame
 
         {stats.live?.games.length ? (
           <Shelf title={`Playing right now · ${stats.live.players} in a game`}>
-            {stats.live.games.map((g) => (
+            {withoutAdult(stats.live.games, hideAdult).map((g) => (
               <Poster key={g.slug} game={g} blur={adultBlur(g.nsfw, showAdult)} onClick={() => onGame(g.slug)} line={`${g.players} playing now`} />
             ))}
           </Shelf>
@@ -274,7 +275,7 @@ export function CommunityPage({ games, onGame, onProfile }: { games: LibraryGame
 
         {p.mostPlayed.length ? (
           <Shelf title="Most played">
-            {p.mostPlayed.map((g) => (
+            {withoutAdult(p.mostPlayed, hideAdult).map((g) => (
               <Poster key={g.slug} game={g} blur={adultBlur(g.nsfw, showAdult)} onClick={() => onGame(g.slug)} line={`${num(g.hours)}h · ${g.players} player${g.players === 1 ? "" : "s"}`} />
             ))}
           </Shelf>
@@ -282,7 +283,7 @@ export function CommunityPage({ games, onGame, onProfile }: { games: LibraryGame
 
         {stats.popular.length ? (
           <Shelf title="Game highlights">
-            {stats.popular.map((g) => (
+            {withoutAdult(stats.popular, hideAdult).map((g) => (
               <Poster
                 key={g.slug}
                 game={g}

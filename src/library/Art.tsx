@@ -1,5 +1,5 @@
 import { adultBlur, useShowAdult } from '@/lib/adult'
-import { useArt } from '@/lib/art'
+import { useArt, withSharpHeroes } from '@/lib/art'
 import { cn } from '@/lib/utils'
 import { Busy } from '@/ui'
 
@@ -44,6 +44,14 @@ export function Art({
  * the title logo on it. It never shows a stand-in and then swaps: a spinner
  * until the real banner is in, then it fades up. The logo, when there is one,
  * is the title; otherwise the title in the page's own type.
+ *
+ * The box keeps the hero's own shape (Steam draws them 96:31, key art in the
+ * middle) and only stops growing at about half the window's height, so a wide
+ * window shows the picture instead of a strip off its top. It used to be a
+ * fixed 320px cut from the top edge, which on a 1600px-wide page kept a third
+ * of the art. A picture too small to fill the width without going soft (a
+ * game with only Steam's 460px header) is drawn at its own size over a
+ * blurred wash of itself, never stretched.
  */
 export function GameBanner({
   title,
@@ -63,17 +71,25 @@ export function GameBanner({
   pending?: boolean
 }) {
   const showAdult = useShowAdult()
-  const found = useArt(pending ? [] : banners, 'banner')
-  const hero = pending ? { src: null, status: 'loading' as const } : found
+  const found = useArt(pending ? [] : withSharpHeroes(banners), 'banner')
+  const hero = pending ? { src: null, status: 'loading' as const, width: undefined } : found
   const mark = useArt(pending ? [] : [logo], 'logo')
+  const blur = adultBlur(adult, showAdult)
+  // Under 1200px wide, filling a page that is usually wider means stretching it.
+  const small = !!hero.width && hero.width < 1200
   return (
-    <div className="relative h-80 overflow-hidden bg-card">
+    <div className="relative aspect-[96/31] max-h-[min(52vh,36rem)] min-h-56 w-full overflow-hidden bg-card">
       {hero.status === 'loading' ? (
         <div className="absolute inset-0 grid place-items-center text-muted-foreground">
           <Busy className="size-5" />
         </div>
+      ) : hero.src && small ? (
+        <>
+          <img src={hero.src} alt="" aria-hidden className={cn('kryo-fade absolute inset-0 size-full scale-110 object-cover opacity-50 blur-2xl', blur)} />
+          <img src={hero.src} alt="" className={cn('kryo-fade absolute inset-y-0 right-0 h-full w-auto max-w-[70%] object-contain', blur)} />
+        </>
       ) : hero.src ? (
-        <img src={hero.src} alt="" className={cn('kryo-fade absolute inset-0 size-full object-cover object-top', adultBlur(adult, showAdult))} />
+        <img src={hero.src} alt="" className={cn('kryo-fade absolute inset-0 size-full object-cover object-center', blur)} />
       ) : (
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,var(--secondary),transparent_70%)]" />
       )}

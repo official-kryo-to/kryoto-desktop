@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { containDialog } from './dialog-focus'
 import { Check as CheckIcon, ChevronDown, Copy, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { isTauri } from '@/lib/bridge'
@@ -103,17 +105,22 @@ export function Modal({
   /** The body is one pane that fills the dialog (a `Panes` layout). */
   fill?: boolean
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-  return (
+  const overlay = useRef<HTMLDivElement>(null)
+  const dialog = useRef<HTMLDivElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useLayoutEffect(() => {
+    if (overlay.current && dialog.current) return containDialog(overlay.current, dialog.current, () => close.current())
+  }, [])
+  return createPortal(
     <div
+      ref={overlay}
       className="kryo-fade fixed inset-0 z-[500] grid place-items-center bg-black/70 p-6 backdrop-blur-sm"
       onPointerDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
+        ref={dialog}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -137,7 +144,7 @@ export function Modal({
           </footer>
         ) : null}
       </div>
-    </div>
+    </div>, document.body,
   )
 }
 
@@ -196,8 +203,17 @@ export type MenuEntry =
   | { heading: string }
 
 export function MenuList({ items, onDone }: { items: MenuEntry[]; onDone: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => { ref.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus() }, [])
   return (
-    <>
+    <div ref={ref} onKeyDown={(e) => {
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+      e.preventDefault()
+      const buttons = [...ref.current!.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')]
+      const current = buttons.indexOf(document.activeElement as HTMLElement)
+      const index = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : (current + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+      buttons[index]?.focus()
+    }}>
       {items.map((item, i) =>
         'separator' in item ? (
           <div key={i} className="my-1 h-px bg-border" />
@@ -218,8 +234,8 @@ export function MenuList({ items, onDone }: { items: MenuEntry[]; onDone: () => 
             className={cn(
               'flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors disabled:opacity-40',
               item.danger
-                ? 'text-destructive hover:bg-destructive hover:text-destructive-foreground'
-                : 'text-foreground hover:bg-primary hover:text-primary-foreground',
+                ? 'text-destructive hover:bg-destructive hover:text-destructive-foreground focus:bg-destructive focus:text-destructive-foreground'
+                : 'text-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground',
             )}
           >
             {item.icon ? <span className="grid size-3.5 place-items-center [&>svg]:size-3.5">{item.icon}</span> : null}
@@ -228,7 +244,7 @@ export function MenuList({ items, onDone }: { items: MenuEntry[]; onDone: () => 
           </button>
         ),
       )}
-    </>
+    </div>
   )
 }
 
@@ -281,7 +297,11 @@ export function MenuButton({
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
-  useDismiss(open, ref, () => setOpen(false))
+  const closeBrowser = () => {
+    setOpen(false)
+    ref.current?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.focus()
+  }
+  useDismiss(open, ref, closeBrowser)
   const nativeOpenNow = useNativeOpen(native)
   const useNative = !!native && isTauri()
   const openNative = (el: HTMLElement) => {
@@ -298,6 +318,12 @@ export function MenuButton({
         aria-haspopup="menu"
         aria-expanded={useNative ? nativeOpenNow : open}
         aria-label={label}
+        onKeyDown={(e) => {
+          if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+          e.preventDefault()
+          if (useNative) openNative(e.currentTarget)
+          else setOpen(true)
+        }}
         onClick={(e) => {
           if (!useNative) return setOpen(!open)
           // A second press on the trigger closes its menu.
@@ -315,7 +341,7 @@ export function MenuButton({
       </button>
       {open && !useNative ? (
         <div role="menu" className={cn(MENU_PANEL, 'top-[calc(100%+6px)]', align === 'right' ? 'right-0' : 'left-0')}>
-          {panel ? panel(() => setOpen(false)) : <MenuList items={items ?? []} onDone={() => setOpen(false)} />}
+          {panel ? panel(closeBrowser) : <MenuList items={items ?? []} onDone={closeBrowser} />}
         </div>
       ) : null}
     </div>
@@ -335,6 +361,8 @@ export function useNativeOpen(menu: string | undefined) {
 /** A right-click menu at the pointer, kept on screen. */
 export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuEntry[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement | null>(null)
+  const trigger = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  useLayoutEffect(() => () => { if (trigger.current?.isConnected) trigger.current.focus() }, [])
   const [pos, setPos] = useState({ x, y })
   useDismiss(true, ref, onClose)
   useLayoutEffect(() => {
@@ -392,19 +420,31 @@ export function Segmented<T extends string>({
   value,
   options,
   onChange,
+  label,
 }: {
   value: T
   options: { value: T; label: string }[]
   onChange: (v: T) => void
+  label?: string
 }) {
   return (
-    <div className="kryo-pill inline-flex w-fit flex-wrap gap-1 border border-border p-1">
+    <div role="radiogroup" aria-label={label ?? options.map(o => o.label).join(' or ')} className="kryo-pill inline-flex w-fit flex-wrap gap-1 border border-border p-1">
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           role="radio"
           aria-checked={value === o.value}
+          tabIndex={value === o.value || (!options.some(option => option.value === value) && o === options[0]) ? 0 : -1}
+          onKeyDown={(e) => {
+            if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+            e.preventDefault()
+            const current = options.indexOf(o)
+            const index = e.key === 'Home' ? 0 : e.key === 'End' ? options.length - 1 : (current + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length
+            const next = options[index]
+            if (next) onChange(next.value)
+            e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]').item(index)?.focus()
+          }}
           onClick={() => onChange(o.value)}
           className={cn(
             'kryo-pill h-7 px-3 text-[10px] font-bold uppercase tracking-wider transition-colors',
@@ -437,7 +477,15 @@ export function Dropdown<T extends string>({
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
-  useDismiss(open, ref, () => setOpen(false))
+  const id = useId()
+  useLayoutEffect(() => {
+    if (open) (ref.current?.querySelector<HTMLElement>('[aria-selected="true"]') ?? ref.current?.querySelector<HTMLElement>('[role="option"]'))?.focus()
+  }, [open])
+  const dismiss = () => {
+    setOpen(false)
+    ref.current?.querySelector<HTMLButtonElement>('[aria-haspopup]')?.focus()
+  }
+  useDismiss(open, ref, dismiss)
   const current = options.find((o) => o.value === value)
   return (
     <div ref={ref} className={cn('relative', className)}>
@@ -446,6 +494,10 @@ export function Dropdown<T extends string>({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={label}
+        aria-controls={open ? id : undefined}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setOpen(true) }
+        }}
         onClick={() => setOpen((o) => !o)}
         className="kryo-pill flex h-9 w-full items-center gap-2 border border-border bg-background pl-4 pr-3 text-left text-xs text-foreground transition-colors hover:border-foreground/60 aria-expanded:border-foreground"
       >
@@ -453,7 +505,14 @@ export function Dropdown<T extends string>({
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
       {open ? (
-        <div role="listbox" className={cn(MENU_PANEL, 'left-0 right-0 top-[calc(100%+4px)] max-h-64 overflow-auto')}>
+        <div id={id} role="listbox" aria-label={label ?? current?.label ?? 'Choose'} onKeyDown={(e) => {
+          if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+          e.preventDefault()
+          const items = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+          const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement)
+          const index = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (currentIndex + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+          items[index]?.focus()
+        }} className={cn(MENU_PANEL, 'left-0 right-0 top-[calc(100%+4px)] max-h-64 overflow-auto')}>
           {options.map((o) => (
             <button
               key={o.value}
@@ -461,7 +520,7 @@ export function Dropdown<T extends string>({
               role="option"
               aria-selected={o.value === value}
               onClick={() => {
-                setOpen(false)
+                dismiss()
                 onChange(o.value)
               }}
               className="kryo-square flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground"

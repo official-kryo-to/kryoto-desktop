@@ -194,7 +194,7 @@ function DesktopPane({ section }: { section: SettingsSection }) {
   const [endpointDraft, setEndpointDraft] = useState(stored?.catalogEndpoint ?? '')
   const timer = useRef<number | undefined>(undefined)
   useEffect(() => {
-    if (stored && !s) setS(stored)
+    if (stored && (!s || (s.recoveryError && !stored.recoveryError))) setS(stored)
   }, [stored, s])
   useEffect(() => {
     if (stored) setEndpointDraft(stored.catalogEndpoint)
@@ -256,14 +256,14 @@ function DesktopPane({ section }: { section: SettingsSection }) {
           <>
             <Section title="Connections" hint="More connections download faster on most lines, the way a download manager does. One is the slow, careful way.">
               <Segmented
-                value={String(s.connections)}
+                label="Download connections" value={String(s.connections)}
                 options={['1', '4', '8', '16', '32'].map((v) => ({ value: v, label: v }))}
                 onChange={(v) => set('connections', Number(v))}
               />
             </Section>
             <Section title="Speed limit">
               <Segmented
-                value={String(s.speedLimitMb)}
+                label="Download speed limit" value={String(s.speedLimitMb)}
                 options={[
                   { value: '0', label: 'None' },
                   { value: '5', label: '5 MB/s' },
@@ -285,7 +285,7 @@ function DesktopPane({ section }: { section: SettingsSection }) {
         {section === 'general' ? (
           <>
             <Section title="Open on">
-              <Segmented value={s.startPage} options={[{ value: 'library', label: 'Library' }, { value: 'store', label: 'Store' }]} onChange={(v) => set('startPage', v)} />
+              <Segmented label="Open on" value={s.startPage} options={[{ value: 'library', label: 'Library' }, { value: 'store', label: 'Store' }]} onChange={(v) => set('startPage', v)} />
             </Section>
             <Check checked={s.closeToTray} onChange={(v) => set('closeToTray', v)} label="Closing the window keeps Kryoto running in the tray" />
             <Check checked={s.startWithSystem} onChange={(v) => set('startWithSystem', v)} label={`Start Kryoto when I sign in to ${isWindowsHost() ? 'Windows' : 'my computer'}`} />

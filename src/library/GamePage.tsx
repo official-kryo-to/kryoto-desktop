@@ -270,39 +270,7 @@ export function GamePage({
               <p className="text-sm leading-relaxed text-muted-foreground">{game.short}</p>
             </Card>
           ) : null}
-          {game.entries.length > 1 ? (
-            <Card>
-              <Label className="mb-3">Ways to play</Label>
-              <ul className="grid gap-2">
-                {game.entries.map((e, i) => (
-                  <li key={`${e.executable}|${e.arguments}`} className="kryo-radius flex items-center gap-3 border border-border p-2 pl-3">
-                    {entryIsVr(e) ? <Glasses className="size-4 text-muted-foreground" /> : <Play className="size-4 text-muted-foreground" />}
-                    <span className="grid min-w-0 grow">
-                      <span className="truncate text-xs font-bold text-foreground">
-                        {entryLabel(e)}
-                        {target === i ? <span className="ml-2 text-[9px] uppercase tracking-wider text-muted-foreground">default</span> : null}
-                      </span>
-                      <span className="kryo-ascii-art truncate text-[11px] text-muted-foreground">
-                        {e.executable}
-                        {e.arguments ? <span className="text-foreground"> {e.arguments}</span> : null}
-                      </span>
-                    </span>
-                    <Button variant="outline" size="sm" onClick={() => onPlayEntry(i)} disabled={running}>
-                      Play
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          ) : null}
           <AddonsCard game={game} onGet={onGetUpdate} onChanged={(g) => onGameChanged?.(g)} />
-          <Card>
-            <Label className="mb-3">Play runs</Label>
-            <CommandLine text={command || '...'} />
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              Exactly what starts when you press Play - change it under Manage, Properties.
-            </p>
-          </Card>
         </div>
         <Card className="grid gap-3">
           <Label>Info</Label>
@@ -315,12 +283,19 @@ export function GamePage({
             <Fact k="Folder" v={game.installDir} mono />
             {game.launchOptions ? <Fact k="Options" v={game.launchOptions} mono /> : null}
           </dl>
-          {onStorePage ? (
-            <Button variant="outline" size="sm" onClick={onStorePage} className="w-fit">
-              <Globe className="size-3" />
-              Store page
-            </Button>
-          ) : null}
+          {/* What Play starts, for when a game will not: there when it is
+              wanted, folded away when it is not. The Store page and the ways
+              to play are in the bar above (the globe, and Play's own menu). */}
+          <details className="group border-t border-border pt-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground">
+              Launch command
+              <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="mt-2 grid gap-2">
+              <CommandLine text={command || '...'} />
+              <p className="text-[11px] text-muted-foreground">Change it under Manage, Properties.</p>
+            </div>
+          </details>
         </Card>
       </div>
     </section>

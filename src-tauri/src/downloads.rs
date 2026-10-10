@@ -350,15 +350,23 @@ fn state_file<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("downloads.json"))
 }
 
+static PERSIST: Mutex<()> = Mutex::new(());
+
+pub(crate) fn persist_checked<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    use std::io::Write;
+    let _guard = PERSIST.lock().map_err(|_| "download persistence lock poisoned")?;
+    let file = state_file(app).ok_or("Could not find the download state folder.")?;
+    let list = app.state::<Downloads>().list.lock().map_err(|_| "download list lock poisoned")?.clone();
+    let tmp = file.with_extension("json.tmp");
+    let mut output = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    output.write_all(&serde_json::to_vec_pretty(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    output.sync_all().map_err(|e| e.to_string())?;
+    drop(output);
+    std::fs::rename(tmp, file).map_err(|e| e.to_string())
+}
+
 fn persist<R: Runtime>(app: &AppHandle<R>) {
-    let Some(file) = state_file(app) else { return };
-    let list = app.state::<Downloads>().list.lock().map(|l| l.clone()).unwrap_or_default();
-    if let Ok(json) = serde_json::to_string_pretty(&list) {
-        let tmp = file.with_extension("json.tmp");
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(tmp, file);
-        }
-    }
+    if let Err(e) = persist_checked(app) { crate::logging::error("download-save", &e); }
 }
 
 fn emit<R: Runtime>(app: &AppHandle<R>, force: bool) {
@@ -612,7 +620,20 @@ fn base64url(text: &str) -> Option<Vec<u8>> {
 
 /// Queue a download the Store handed over. `slug` is the game page it came from.
 pub fn enqueue<R: Runtime>(app: &AppHandle<R>, url: String, slug: Option<String>, title: Option<String>) {
-    enqueue_item(app, url, slug, title, None, None)
+    if let Err(e) = enqueue_item(app, url, slug, title, None, None, None) {
+        let _ = app.emit("notify", Notice::new("Could not queue download", &e, None));
+    }
+}
+
+pub fn enqueue_remote<R: Runtime>(app: &AppHandle<R>, command: &str, url: String, slug: Option<String>, title: Option<String>) -> Result<(), String> {
+    enqueue_item(app, url, slug, title, None, None, Some(format!("remote-{command}")))
+}
+
+pub fn remote_control<R: Runtime>(app: &AppHandle<R>, id: &str, status: Status) -> Result<(), String> {
+    if edit(app, id, |d| d.status = status).is_none() { return Err("That download is no longer in the list.".into()); }
+    persist_checked(app)?;
+    emit(app, true);
+    Ok(())
 }
 
 /// Queue a download from one of a game's mirrors: resolved to its file when
@@ -625,8 +646,7 @@ pub fn enqueue_mirror<R: Runtime>(
     release: Option<String>,
 ) -> Result<(), String> {
     let (_, host) = crate::resolvers::classify(&page).ok_or("Kryoto can't download from that host yet. Open it in your browser instead.")?;
-    enqueue_item(app, page.clone(), slug, title, Some(Mirror { page, host: host.into() }), release);
-    Ok(())
+    enqueue_item(app, page.clone(), slug, title, Some(Mirror { page, host: host.into() }), release, None)
 }
 
 fn enqueue_item<R: Runtime>(
@@ -636,14 +656,20 @@ fn enqueue_item<R: Runtime>(
     title: Option<String>,
     mirror: Option<Mirror>,
     release: Option<String>,
-) {
+    remote_id: Option<String>,
+) -> Result<(), String> {
     let state = app.state::<Downloads>();
+    if let Some(id) = &remote_id {
+        if state.list.lock().map_err(|_| "download list lock poisoned")?.iter().any(|d| &d.id == id) {
+            return persist_checked(app);
+        }
+    }
     // Download pressed again for a file whose download stopped part way (its
     // link ran out, or it failed): carry that one on with the fresh link
     // instead of starting a second from zero. Every range is checked against
     // the file it started from, so a different build under the same name
     // simply starts over.
-    if mirror.is_none() {
+    if mirror.is_none() && remote_id.is_none() {
         if let Some(found) = unfinished_copy(&state, &url, slug.as_deref()) {
             edit(app, &found, |d| {
                 d.url = url.clone();
@@ -656,21 +682,21 @@ fn enqueue_item<R: Runtime>(
             let _ = app.emit("notify", Notice::new("Picking up where it left off", "That download carries on from where it stopped.", None));
             let _ = app.emit("download-started", found.clone());
             let _ = requeue(app, &found);
-            return;
+            return Ok(());
         }
     }
     // The same page's Download pressed twice while the first is still going.
-    if let Ok(list) = state.list.lock() {
+    if remote_id.is_none() { if let Ok(list) = state.list.lock() {
         if list.iter().any(|d| {
             d.slug.is_some()
                 && d.slug == slug
                 && matches!(d.status, Status::Queued | Status::Resolving | Status::Downloading | Status::Verifying | Status::Extracting)
         }) {
             let _ = app.emit("notify", Notice::new("Already downloading", "That game is already in Downloads.", None));
-            return;
+            return Ok(());
         }
-    }
-    let id = format!("dl-{}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+    } }
+    let id = remote_id.unwrap_or_else(|| format!("dl-{}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)));
     // The page's title first; then the name the link itself carries, so a
     // download that arrives with nothing else is still called after its game
     // from the first frame rather than "Download".
@@ -693,13 +719,15 @@ fn enqueue_item<R: Runtime>(
         release,
         ..Default::default()
     };
-    if let Ok(mut list) = state.list.lock() {
-        list.insert(0, item);
+    state.list.lock().map_err(|_| "download list lock poisoned")?.insert(0, item);
+    if let Err(e) = persist_checked(app) {
+        if let Ok(mut list) = state.list.lock() { list.retain(|d| d.id != id); }
+        return Err(format!("Could not save the download queue: {e}"));
     }
-    persist(app);
     emit(app, true);
     let _ = app.emit("download-started", id.clone());
     start(app.clone(), id);
+    Ok(())
 }
 
 /// A paused or failed download of the same file as `url` (our own, from the
@@ -915,7 +943,7 @@ pub fn safe_name(name: &str) -> String {
     if cleaned.is_empty() { "Game".into() } else { cleaned.chars().take(120).collect() }
 }
 
-async fn run<R: Runtime>(app: &AppHandle<R>, id: &str, flag: &AtomicU8) -> Result<(), String> {
+async fn run<R: Runtime>(app: &AppHandle<R>, id: &str, flag: &Arc<AtomicU8>) -> Result<(), String> {
     let settings = crate::settings::load(app);
     let client = client_builder().build().map_err(|e| e.to_string())?;
 
@@ -1009,8 +1037,9 @@ async fn run<R: Runtime>(app: &AppHandle<R>, id: &str, flag: &AtomicU8) -> Resul
             }
         }
         identify(app, id, &client).await;
-        match verify(app, id).await {
+        match verify(app, id, flag).await {
             Ok(()) => break,
+            Err(_) if flag.load(Ordering::SeqCst) != RUN => return settle_stopped(app, id, flag),
             // A damaged download is usually one bad stretch of a long
             // transfer. Fetch it again once by itself before asking the player.
             Err(e) if !fetched_again && flag.load(Ordering::SeqCst) == RUN => {
@@ -1026,7 +1055,10 @@ async fn run<R: Runtime>(app: &AppHandle<R>, id: &str, flag: &AtomicU8) -> Resul
     if edit(app, id, |_| {}).and_then(|d| d.addon).is_some() {
         return crate::addons::install(app, id, &settings).await;
     }
-    install(app, id, &settings).await
+    match install(app, id, &settings, flag).await {
+        Err(_) if flag.load(Ordering::SeqCst) != RUN => settle_stopped(app, id, flag),
+        done => done,
+    }
 }
 
 /// Fetch every byte of the archive, riding out dropped connections.
@@ -1222,13 +1254,17 @@ pub fn match_file(json: &serde_json::Value, file: &str) -> FileMatch {
 /// Check the archive against the SHA-256 kryo.to lists for it. A mismatch
 /// deletes the archive - it cannot be trusted, and resuming it would only
 /// keep the damage.
-async fn verify<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
+async fn verify<R: Runtime>(app: &AppHandle<R>, id: &str, flag: &Arc<AtomicU8>) -> Result<(), String> {
     let d = edit(app, id, |_| {}).ok_or("The download is gone.")?;
     let Some(expected) = d.sha256.clone() else { return Ok(()) };
     if d.verified {
         return Ok(());
     }
+    if flag.load(Ordering::SeqCst) != RUN {
+        return Err(STOPPED.into());
+    }
     set_status(app, id, Status::Verifying, None);
+    let stop = flag.clone();
     let path = PathBuf::from(&d.archive_path);
     let total = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     let progress_app = app.clone();
@@ -1241,6 +1277,11 @@ async fn verify<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> 
         let mut buf = vec![0u8; 4 * 1024 * 1024];
         let mut done = 0u64;
         loop {
+            // Hashing a big archive takes a while; Pause and Cancel answer
+            // between reads instead of after the last one.
+            if stop.load(Ordering::SeqCst) != RUN {
+                return Ok(String::new());
+            }
             let n = file.read(&mut buf)?;
             if n == 0 {
                 break;
@@ -1258,6 +1299,9 @@ async fn verify<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> 
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("Could not read the archive to check it: {e}"))?;
+    if flag.load(Ordering::SeqCst) != RUN {
+        return Err(STOPPED.into());
+    }
     if actual != expected {
         crate::logging::error("download", &format!("{id}: sha256 {actual} is not {expected}"));
         let _ = std::fs::remove_file(&d.archive_path);
@@ -1372,8 +1416,8 @@ fn waiting_order<R: Runtime>(app: &AppHandle<R>, active: Option<&str>) -> Vec<St
 
 /// Mark a stopped download queued again and start its task.
 fn requeue<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
-    if app.state::<Downloads>().controls.lock().map(|c| c.contains_key(id)).unwrap_or(false) {
-        return Ok(());
+    if let Some(flag) = app.state::<Downloads>().controls.lock().map_err(|_| "Download controls are unavailable.")?.get(id) {
+        return if flag.load(Ordering::SeqCst) == 0 { Ok(()) } else { Err("Wait for the download to stop, then try again.".into()) };
     }
     edit(app, id, |d| {
         d.error = None;
@@ -1387,13 +1431,16 @@ fn requeue<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
 
 fn settle_stopped<R: Runtime>(app: &AppHandle<R>, id: &str, flag: &AtomicU8) -> Result<(), String> {
     if flag.load(Ordering::SeqCst) == CANCEL {
-        if let Some(d) = edit(app, id, |_| {}) {
-            if !d.archive_path.is_empty() {
-                let _ = std::fs::remove_file(&d.archive_path);
-            }
-        }
+        let archive = edit(app, id, |_| {}).map(|d| d.archive_path).filter(|p| !p.is_empty());
         edit(app, id, |d| d.received = 0);
         set_status(app, id, Status::Canceled, None);
+        // Deleting a many-gigabyte file can take a while (antivirus, a slow
+        // disk); the row says Cancelled straight away regardless.
+        if let Some(path) = archive {
+            std::thread::spawn(move || {
+                let _ = std::fs::remove_file(path);
+            });
+        }
     } else {
         set_status(app, id, Status::Paused, None);
     }
@@ -1659,6 +1706,10 @@ async fn transfer<R: Runtime>(
             last_persist = Instant::now();
         }
     }
+    // Cancelled: it is about to be deleted, so it is not flushed first.
+    if flag.load(Ordering::SeqCst) == CANCEL {
+        return Ok(false);
+    }
     // On disk before it is counted: a resume starts from the file's length.
     file.flush().await.map_err(|e| Transfer::Fatal(format!("Writing the download failed: {e}")))?;
     let _ = file.get_ref().sync_data().await;
@@ -1873,6 +1924,15 @@ async fn transfer_parallel<R: Runtime>(
             Err(e) => retry = Some(e.to_string()),
         }
     }
+    // Cancelled: the file is about to be deleted, so neither wait for the save
+    // in flight nor flush it. Flushing gigabytes of a big download to disk
+    // first is what kept Cancel spinning for minutes.
+    if flag.load(Ordering::SeqCst) == CANCEL {
+        if let Some(t) = saving {
+            t.abort();
+        }
+        return Ok(false);
+    }
     if let Some(t) = saving {
         let _ = t.await;
     }
@@ -2026,7 +2086,10 @@ async fn fetch_range(
 }
 
 /// Unpack into the library folder, find the exe, and list the game.
-async fn install<R: Runtime>(app: &AppHandle<R>, id: &str, settings: &crate::settings::Settings) -> Result<(), String> {
+async fn install<R: Runtime>(app: &AppHandle<R>, id: &str, settings: &crate::settings::Settings, flag: &Arc<AtomicU8>) -> Result<(), String> {
+    if flag.load(Ordering::SeqCst) != RUN {
+        return Err(STOPPED.into());
+    }
     set_status(app, id, Status::Extracting, None);
     let item = edit(app, id, |_| {}).ok_or("The download is gone.")?;
     let archive = PathBuf::from(&item.archive_path);
@@ -2061,15 +2124,30 @@ async fn install<R: Runtime>(app: &AppHandle<R>, id: &str, settings: &crate::set
     let progress_app = app.clone();
     let progress_id = id.to_string();
     let (dest_clone, staging_clone) = (dest.clone(), staging.clone());
+    let stop = flag.clone();
     let damaged = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<String>, String> {
         let _ = std::fs::remove_dir_all(&staging_clone);
-        let damaged = extract(&archive, &staging_clone, &|done, total| {
-            edit(&progress_app, &progress_id, |d| {
-                d.extracted = done;
-                d.extract_total = total;
+        let unpacked = extract_until(
+            &archive,
+            &staging_clone,
+            &|done, total| {
+                edit(&progress_app, &progress_id, |d| {
+                    d.extracted = done;
+                    d.extract_total = total;
+                });
+                emit(&progress_app, false);
+            },
+            &stop,
+        );
+        if unpacked.as_ref().is_err_and(|e| e == STOPPED) {
+            // Half a game is no use to anyone; it goes, without holding up the
+            // Cancel that asked for it.
+            std::thread::spawn(move || {
+                let _ = std::fs::remove_dir_all(&staging_clone);
             });
-            emit(&progress_app, false);
-        })?;
+            return Err(STOPPED.into());
+        }
+        let damaged = unpacked?;
         // Unpacked beside the game rather than into it, then merged in: an
         // archive that wraps everything in one folder does not end up nested
         // a level down, and an update overwrites the files it ships while
@@ -2222,6 +2300,17 @@ fn safe_join(dest: &Path, name: &str) -> Option<PathBuf> {
 /// own header, a byte off in an asset), so that is a warning, not a failure.
 /// Any other error (no space, no permission, not an archive) still fails.
 pub fn extract(archive: &Path, dest: &Path, progress: &dyn Fn(u64, Option<u64>)) -> Result<Vec<String>, String> {
+    extract_until(archive, dest, progress, &AtomicU8::new(RUN))
+}
+
+/// What `extract_until`, `verify` and `install` answer when they were stopped
+/// (Pause or Cancel).
+pub const STOPPED: &str = "stopped";
+
+/// `extract`, giving up as soon as `stop` is no longer RUN: 7-Zip is killed
+/// and the built-in unpacker stops between reads. A big game takes minutes to
+/// unpack, and Cancel pressed in the middle used to wait for all of it.
+pub fn extract_until(archive: &Path, dest: &Path, progress: &dyn Fn(u64, Option<u64>), stop: &AtomicU8) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest).map_err(|e| format!("Cannot create {}: {e}", dest.display()))?;
     let is_7z = archive
         .extension()
@@ -2233,15 +2322,17 @@ pub fn extract(archive: &Path, dest: &Path, progress: &dyn Fn(u64, Option<u64>))
     // ARM64) and reports damaged files by name.
     let mut errors = Vec::new();
     for tool in seven_zip_tools(is_7z) {
-        match extract_with_7zip(&tool, archive, dest, progress) {
+        match extract_with_7zip(&tool, archive, dest, progress, stop) {
             None => continue,
+            Some(Err(_)) if stop.load(Ordering::SeqCst) != RUN => return Err(STOPPED.into()),
             Some(Ok(damaged)) => return Ok(damaged),
             Some(Err(e)) => errors.push(e),
         }
     }
     if is_7z {
-        match extract_7z(archive, dest, progress) {
+        match extract_7z(archive, dest, progress, stop) {
             Ok(()) => return Ok(Vec::new()),
+            Err(_) if stop.load(Ordering::SeqCst) != RUN => return Err(STOPPED.into()),
             Err(e) => errors.push(e),
         }
     }
@@ -2294,7 +2385,7 @@ pub fn seven_zip_percent(line: &str) -> Option<u64> {
 
 /// Unpack with 7-Zip's console, following its progress. `None` when the tool
 /// is not there; otherwise what it reported damaged, or why it failed.
-fn extract_with_7zip(tool: &Path, archive: &Path, dest: &Path, progress: &dyn Fn(u64, Option<u64>)) -> Option<Result<Vec<String>, String>> {
+fn extract_with_7zip(tool: &Path, archive: &Path, dest: &Path, progress: &dyn Fn(u64, Option<u64>), stop: &AtomicU8) -> Option<Result<Vec<String>, String>> {
     use std::io::Read;
     // The bar counts unpacked bytes when the archive says how many there are
     // (a .7z's headers do), and the archive's own size otherwise.
@@ -2328,6 +2419,13 @@ fn extract_with_7zip(tool: &Path, archive: &Path, dest: &Path, progress: &dyn Fn
         while let Ok(n) = out.read(&mut buf) {
             if n == 0 {
                 break;
+            }
+            // 7-Zip writes its progress several times a second: stopped, it
+            // is killed here rather than left to unpack the whole game.
+            if stop.load(Ordering::SeqCst) != RUN {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Some(Err(STOPPED.into()));
             }
             for &b in &buf[..n] {
                 if matches!(b, b'\x08' | b'\r' | b'\n') {
@@ -2398,7 +2496,7 @@ fn damaged_files(stderr: &str) -> Option<Vec<String>> {
     (!damaged.is_empty()).then_some(damaged)
 }
 
-fn extract_7z(archive: &Path, dest: &Path, progress: &dyn Fn(u64, Option<u64>)) -> Result<(), String> {
+fn extract_7z(archive: &Path, dest: &Path, progress: &dyn Fn(u64, Option<u64>), stop: &AtomicU8) -> Result<(), String> {
     let total: u64 = sevenz_rust::Archive::open(archive)
         .map_err(|e| format!("Not a readable 7z ({e})"))?
         .files
@@ -2423,6 +2521,9 @@ fn extract_7z(archive: &Path, dest: &Path, progress: &dyn Fn(u64, Option<u64>)) 
         let mut writer = std::io::BufWriter::with_capacity(1 << 20, file);
         let mut buf = vec![0u8; 1 << 20];
         loop {
+            if stop.load(Ordering::SeqCst) != RUN {
+                return Err(sevenz_rust::Error::other(STOPPED));
+            }
             let n = reader.read(&mut buf).map_err(sevenz_rust::Error::io)?;
             if n == 0 {
                 break;
@@ -2682,16 +2783,23 @@ pub fn download_cancel(app: AppHandle, state: State<'_, Downloads>, id: String) 
         flag.store(CANCEL, Ordering::SeqCst);
         stop_resolving(&app, &id);
         state.turn.notify_waiters();
+        // The row says so now. The transfer, the check or the unpack stops
+        // within a moment and tidies up behind it (`settle_stopped`), but the
+        // press is answered at once instead of a spinner until it has.
+        set_status(&app, &id, Status::Canceled, None);
         return;
     }
-    // Not running (paused or failed): tidy up here.
-    if let Some(d) = edit(&app, &id, |_| {}) {
-        if !d.archive_path.is_empty() && d.status != Status::Installed {
-            let _ = std::fs::remove_file(&d.archive_path);
-        }
-    }
+    // Not running (paused or failed): tidy up here, the file in the background.
+    let archive = edit(&app, &id, |_| {})
+        .filter(|d| !d.archive_path.is_empty() && d.status != Status::Installed)
+        .map(|d| d.archive_path);
     edit(&app, &id, |d| d.received = 0);
     set_status(&app, &id, Status::Canceled, None);
+    if let Some(path) = archive {
+        std::thread::spawn(move || {
+            let _ = std::fs::remove_file(path);
+        });
+    }
 }
 
 /// Clear a finished, failed or cancelled row.
@@ -2999,7 +3107,7 @@ mod tests {
         };
         let out = dir.join("out");
         let seen = std::cell::RefCell::new(Vec::new());
-        let damaged = extract_with_7zip(&tool, &archive, &out, &|done, total| seen.borrow_mut().push((done, total))).unwrap().unwrap();
+        let damaged = extract_with_7zip(&tool, &archive, &out, &|done, total| seen.borrow_mut().push((done, total)), &AtomicU8::new(RUN)).unwrap().unwrap();
         assert!(damaged.is_empty());
         assert_eq!(std::fs::read(out.join("Game").join("bin").join("Game.exe")).unwrap(), data);
         let total = data.len() as u64 + 2;
@@ -3012,7 +3120,7 @@ mod tests {
         let broken = dir.join("broken.7z");
         std::fs::write(&broken, bytes).unwrap();
         let out = dir.join("out2");
-        match extract_with_7zip(&tool, &broken, &out, &|_, _| {}).unwrap() {
+        match extract_with_7zip(&tool, &broken, &out, &|_, _| {}, &AtomicU8::new(RUN)).unwrap() {
             Ok(damaged) => assert!(!damaged.is_empty()),
             Err(e) => assert!(e.contains("7-Zip"), "{e}"),
         }

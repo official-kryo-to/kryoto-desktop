@@ -3,8 +3,8 @@
 # Kryoto Desktop
 
 <p align="center">
-  <a href="https://github.com/kyrotooooo/kryoto-desktop/stargazers"><img src="https://img.shields.io/github/stars/kyrotooooo/kryoto-desktop?style=flat-square&label=stars" alt="GitHub stars"></a>
-  <a href="https://github.com/kyrotooooo/kryoto-desktop/releases/latest"><img src="https://img.shields.io/github/v/release/kyrotooooo/kryoto-desktop?style=flat-square&label=release" alt="Latest release"></a>
+  <a href="https://github.com/official-kryo-to/kryoto-desktop/stargazers"><img src="https://img.shields.io/github/stars/official-kryo-to/kryoto-desktop?style=flat-square&label=stars" alt="GitHub stars"></a>
+  <a href="https://github.com/official-kryo-to/kryoto-desktop/releases/latest"><img src="https://img.shields.io/github/v/release/official-kryo-to/kryoto-desktop?style=flat-square&label=release" alt="Latest release"></a>
   <a href="https://kryo.to/desktop"><img src="https://img.shields.io/badge/kryo.to-desktop-black?style=flat-square" alt="kryo.to/desktop"></a>
 </p>
 
@@ -41,6 +41,10 @@ finish if the home folder is still in it.
 
 Debug builds run as `to.kryo.desktop.dev`, next to an installed copy without
 sharing its data, and never send error reports.
+
+Native tests run with `cargo test --locked --manifest-path src-tauri/Cargo.toml` and keep SQLCipher enabled. On Windows GNU builds, OpenSSL needs a complete GNU-compatible Perl and GNU make. Browser checks use `test/ui.html` and `test/bridge.html` through the dev server: with Playwright and Chromium available, run `node scripts/check-ui.mjs`. Set `DESKTOP_TEST_URL` for a different dev port or `PLAYWRIGHT_BROWSER_CHANNEL=msedge` to use installed Edge.
+
+Website-triggered downloads require the matching website command-delivery migration and protocol 2 endpoints; see [the delivery contract](../kryo.to/docs/desktop-delivery.md). Older clients leave actions waiting for an update.
 
 ## Where things are
 
@@ -119,10 +123,10 @@ Changes are listed in kryo.to's changelog; this app has none of its own.
 
 ## Star history
 
-<a href="https://star-history.com/#kyrotooooo/kryoto-desktop&Date">
+<a href="https://star-history.com/#official-kryo-to/kryoto-desktop&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=kyrotooooo/kryoto-desktop&type=Date&theme=dark" />
-    <img alt="Star history of Kryoto Desktop" src="https://api.star-history.com/svg?repos=kyrotooooo/kryoto-desktop&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=official-kryo-to/kryoto-desktop&type=Date&theme=dark" />
+    <img alt="Star history of Kryoto Desktop" src="https://api.star-history.com/svg?repos=official-kryo-to/kryoto-desktop&type=Date" />
   </picture>
 </a>
 

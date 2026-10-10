@@ -32,21 +32,62 @@ export function reportArt(url: string, where: string) {
   if (isOnline()) logWarn('art', `${where}: ${url} did not load`)
 }
 
+/** The pixel size of every image that has loaded, so a banner can tell a 4K hero from a thumbnail. */
+const sizes = new Map<string, { width: number; height: number }>()
+/** Addresses that failed to load this session: skipped, not asked again. */
+const broken = new Set<string>()
+
 function probe(src: string): Promise<boolean> {
   if (loaded.has(src)) return Promise.resolve(true)
+  if (broken.has(src)) return Promise.resolve(false)
   return new Promise((resolve) => {
     const img = new Image()
     img.decoding = 'async'
     img.onload = () => {
       loaded.add(src)
+      sizes.set(src, { width: img.naturalWidth, height: img.naturalHeight })
       resolve(true)
     }
-    img.onerror = () => resolve(false)
+    img.onerror = () => {
+      broken.add(src)
+      resolve(false)
+    }
     img.src = src
   })
 }
 
-export type ArtState = { src: string | null; status: 'loading' | 'ready' | 'none' }
+export type ArtState = {
+  src: string | null
+  status: 'loading' | 'ready' | 'none'
+  /** The picture's own size, once it is ready. */
+  width?: number
+  height?: number
+}
+
+function ready(src: string): ArtState {
+  return { src, status: 'ready', ...sizes.get(src) }
+}
+
+/**
+ * What is already known about a list, in its order: the best candidate that
+ * has loaded, provided nothing before it is still unknown. A candidate that
+ * has not been tried yet comes first, even when a worse one further down is
+ * in the cache.
+ *
+ * It used to take the first CACHED candidate wherever it was in the list. The
+ * library grid caches every game's portrait cover, so a game's page found the
+ * cover in the cache before it ever asked for the hero, and drew a 600x900
+ * cover stretched across the banner, cropped and soft.
+ */
+function known(list: string[]): { state: ArtState; from: number } {
+  for (let i = 0; i < list.length; i++) {
+    const src = artSrc(list[i])
+    if (!src || broken.has(src)) continue
+    if (loaded.has(src)) return { state: ready(src), from: list.length }
+    return { state: { src: null, status: 'loading' }, from: i }
+  }
+  return { state: { src: null, status: 'none' }, from: list.length }
+}
 
 /**
  * The first of `candidates` that loads: `loading` while it looks (draw a
@@ -56,22 +97,22 @@ export type ArtState = { src: string | null; status: 'loading' | 'ready' | 'none
 export function useArt(candidates: (string | null | undefined)[], where: string): ArtState {
   const list = candidates.filter((c): c is string => !!c?.trim())
   const key = list.join('\n')
-  const [state, setState] = useState<ArtState>(() => {
-    const first = list.map(artSrc).find((s) => s && loaded.has(s))
-    return first ? { src: first, status: 'ready' } : { src: null, status: list.length ? 'loading' : 'none' }
-  })
+  const [state, setState] = useState<ArtState>(() => known(list).state)
   useEffect(() => {
     let cancelled = false
-    // A new set of candidates starts over, from the cache when it can.
-    const ready = list.map(artSrc).find((s) => s && loaded.has(s))
-    setState(ready ? { src: ready, status: 'ready' } : { src: null, status: list.length ? 'loading' : 'none' })
-    if (ready) return
+    // A new set of candidates starts over, from what is already known.
+    const start = known(list)
+    setState(start.state)
+    if (start.from >= list.length) {
+      if (start.state.status === 'none' && list[0]) reportArt(list[0], where)
+      return
+    }
     void (async () => {
-      for (const url of list) {
+      for (const url of list.slice(start.from)) {
         const src = artSrc(url)
         if (!src) continue
         if (await probe(src)) {
-          if (!cancelled) setState({ src, status: 'ready' })
+          if (!cancelled) setState(ready(src))
           return
         }
         if (cancelled) return
@@ -88,4 +129,18 @@ export function useArt(candidates: (string | null | undefined)[], where: string)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, where])
   return state
+}
+
+/**
+ * Steam keeps every library hero at two sizes: `library_hero.jpg` (1920x620)
+ * and `library_hero_2x.jpg` (3840x1240). Art saved before kryo.to resolved the
+ * 2x one, and the guessed app-id address, name the small one, which a wide or
+ * high-DPI window stretches until it is soft. Ask for the 2x first; the small
+ * one stays behind it for the games that only have that.
+ */
+export function withSharpHeroes(candidates: (string | null | undefined)[]): (string | null | undefined)[] {
+  return candidates.flatMap((c) => {
+    const big = c?.replace(/\/library_hero\.jpg(?=$|\?)/, '/library_hero_2x.jpg')
+    return big && big !== c ? [big, c] : [c]
+  })
 }

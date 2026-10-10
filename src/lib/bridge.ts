@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { previewCall, previewBus } from '@/lib/preview'
 
 /**
  * The one door to the native side.
@@ -25,6 +24,13 @@ export type Backend = {
   on: (event: string, handler: (payload: unknown) => void) => () => void
 }
 let web: Backend | null = null
+let preview: Promise<typeof import('./preview')> | null = null
+function previewBackend() {
+  return preview ??= import('./preview').then((backend) => {
+    backend.startPreview()
+    return backend
+  })
+}
 export function useWebBackend(b: Backend) {
   web = b
 }
@@ -34,13 +40,13 @@ export function isWeb() {
 
 export function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (web) return web.call(command, args ?? {}) as Promise<T>
-  return isTauri() ? invoke<T>(command, args) : previewCall<T>(command, args)
+  return isTauri() ? invoke<T>(command, args) : previewBackend().then(b => b.previewCall<T>(command, args))
 }
 
 export function on<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
   if (web) return Promise.resolve(web.on(event, handler as (p: unknown) => void))
   if (isTauri()) return listen<T>(event, (e) => handler(e.payload))
-  return Promise.resolve(previewBus.on(event, handler as (p: unknown) => void))
+  return previewBackend().then(b => b.previewBus.on(event, handler as (p: unknown) => void))
 }
 
 /** Errors from Rust arrive as strings; everything else as Errors. */

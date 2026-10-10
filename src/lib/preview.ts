@@ -175,8 +175,15 @@ const downloadList: Record<string, unknown>[] = [
   }),
 ]
 
-// The preview download moves, so the progress UI can be watched.
-setInterval(() => {
+// Initialized only by the browser-preview backend, never by native/web chat.
+let simulation: ReturnType<typeof setInterval> | undefined
+export function stopPreview() {
+  clearInterval(simulation)
+  simulation = undefined
+}
+export function startPreview() {
+  if (simulation !== undefined) return
+  simulation = setInterval(() => {
   const d = downloadList[0]
   if (!d || d.status !== 'downloading') return
   d.received = Math.min(d.total as number, (d.received as number) + (d.speed as number) / 2)
@@ -184,6 +191,8 @@ setInterval(() => {
   if (d.received === d.total) d.status = 'extracting'
   previewBus.emit('downloads', downloadList.map((x) => ({ ...x })))
 }, 500)
+}
+if (import.meta.hot) import.meta.hot.dispose(stopPreview)
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 

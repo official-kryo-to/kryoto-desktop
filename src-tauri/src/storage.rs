@@ -8,10 +8,10 @@
 
 use crate::library::{self, LibraryGame};
 use crate::settings::{self, same_path};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 /// Total and free bytes on the drive holding `path` (or its nearest existing
 /// parent, for a folder that is not made yet).
@@ -133,6 +133,9 @@ fn stored(g: &LibraryGame, folder: PathBuf) -> StoredGame {
 }
 
 fn overview<R: Runtime>(app: &AppHandle<R>) -> Result<StorageOverview, String> {
+    if !app.try_state::<Moving>().is_some_and(|moving| moving.0.load(Ordering::SeqCst)) {
+        recover_move(app)?;
+    }
     let s = settings::load(app);
     let folders = settings::all_folders(&s);
     let games = library::load(app)?;
@@ -249,6 +252,83 @@ struct MoveProgress {
     error: Option<String>,
 }
 
+#[derive(Deserialize, Serialize)]
+struct MoveJournal {
+    id: String,
+    from: PathBuf,
+    dest: PathBuf,
+    old_dir: String,
+    new_dir: String,
+}
+
+fn journal_file<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("storage-move.json"))
+}
+
+fn save_journal(path: &Path, journal: &MoveJournal) -> Result<(), String> {
+    use std::io::Write;
+    let tmp = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    file.write_all(&serde_json::to_vec(journal).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
+    std::fs::rename(tmp, path).map_err(|e| e.to_string())
+}
+
+/// Recover metadata before the downloader or Library can use an interrupted move.
+/// Never delete either copy during recovery: a partial copy may contain user edits.
+pub fn recover_move<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let path = journal_file(app)?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("Could not read the interrupted move: {e}")),
+    };
+    let journal: MoveJournal = serde_json::from_str(&text).map_err(|e| format!("The move recovery record is damaged: {e}"))?;
+    let games = library::load(app)?;
+    let game = games.iter().find(|g| g.id == journal.id).ok_or("The interrupted move's game is no longer in the library. Both folders have been kept.")?;
+    recover_paths(&journal, &game.install_dir)?;
+    if journal.from.exists() && journal.dest.exists() {
+        let extra = if same_path(&game.install_dir, &journal.new_dir) { &journal.from } else { &journal.dest };
+        crate::logging::warn("storage", &format!("An interrupted move kept a second folder at {}. Inspect it before removing it.", extra.display()));
+    }
+    std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+fn recover_paths(journal: &MoveJournal, install_dir: &str) -> Result<(), String> {
+    if same_path(install_dir, &journal.new_dir) && !Path::new(&journal.new_dir).is_dir() {
+        return Err("The moved install folder could not be found. Both folders and the recovery record have been kept.".into());
+    }
+    if same_path(install_dir, &journal.old_dir) && !journal.from.exists() {
+        // A rename happened, but metadata did not commit. Restore the original.
+        if !journal.dest.exists() { return Err("Neither folder for the interrupted move could be found. The recovery record has been kept.".into()); }
+        std::fs::rename(&journal.dest, &journal.from).map_err(|e| format!("Could not restore the interrupted move; its files are at {}: {e}", journal.dest.display()))?;
+    } else if !same_path(install_dir, &journal.old_dir) && !same_path(install_dir, &journal.new_dir) {
+        return Err("The library entry changed during an interrupted move. Both folders and the recovery record have been kept.".into());
+    }
+    Ok(())
+}
+
+fn commit_move(journal: &MoveJournal, renamed: bool, save: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    if let Err(e) = save() {
+        if renamed {
+            if journal.from.exists() {
+                return Err(format!("Could not save the move ({e}); the original path now exists. The game is at {} and its recovery record has been kept.", journal.dest.display()));
+            }
+            std::fs::rename(&journal.dest, &journal.from).map_err(|rollback| format!("Could not save the move ({e}) or restore its original folder ({rollback}). The game is at {} and its recovery record has been kept.", journal.dest.display()))?;
+        }
+        return Err(format!("Could not save the move. The original game folder has been kept: {e}"));
+    }
+    Ok(())
+}
+
+fn install_suffix(from: &Path, install: &Path) -> Result<PathBuf, String> {
+    let install = install.canonicalize().map_err(|e| format!("Could not find the game's install folder: {e}"))?;
+    install.strip_prefix(from).map(Path::to_path_buf).map_err(|_| "The install folder is outside the game folder.".into())
+}
+
 fn copy_tree(from: &Path, to: &Path, progress: &mut dyn FnMut(u64)) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -297,6 +377,7 @@ pub async fn storage_move(
 }
 
 async fn move_game<R: Runtime>(app: &AppHandle<R>, id: &str, to: &str) -> Result<(), String> {
+    recover_move(app)?;
     let s = settings::load(app);
     let folders = settings::all_folders(&s);
     if !folders.iter().any(|f| same_path(f, to)) {
@@ -306,8 +387,11 @@ async fn move_game<R: Runtime>(app: &AppHandle<R>, id: &str, to: &str) -> Result
     let from = game_folder(&folders, &game.install_dir)
         .ok_or("This game was added from its own folder, so Kryoto does not move it. Move it yourself, then point Properties at the new place.")?;
     let name = from.file_name().ok_or("That game folder has no name.")?.to_owned();
-    let target_root = PathBuf::from(to);
+    std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    let target_root = PathBuf::from(to).canonicalize().map_err(|e| e.to_string())?;
     let dest = target_root.join(&name);
+    let rest = install_suffix(&from, Path::new(&game.install_dir))?;
+    let new_dir = dest.join(rest).to_string_lossy().into_owned();
     if target_root.canonicalize().ok().as_deref() == from.parent() {
         return Err("It is already in that folder.".into());
     }
@@ -328,14 +412,20 @@ async fn move_game<R: Runtime>(app: &AppHandle<R>, id: &str, to: &str) -> Result
     }
     crate::logging::info("storage", &format!("moving {} from {} to {}", game.title, from.display(), dest.display()));
 
+    let journal_path = journal_file(app)?;
+    let journal = MoveJournal {
+        id: id.into(), from: from.clone(), dest: dest.clone(), old_dir: game.install_dir.clone(), new_dir: new_dir.clone(),
+    };
+    save_journal(&journal_path, &journal)?;
+
     let progress_app = app.clone();
     let pid = id.to_string();
     let (from_c, dest_c) = (from.clone(), dest.clone());
-    let leftover = tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
+    let renamed = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
         std::fs::create_dir_all(dest_c.parent().unwrap_or(&dest_c)).map_err(|e| e.to_string())?;
         // Same drive: a rename, done at once.
         if std::fs::rename(&from_c, &dest_c).is_ok() {
-            return Ok(None);
+            return Ok(true);
         }
         let mut copied = 0u64;
         let mut last = std::time::Instant::now();
@@ -354,6 +444,21 @@ async fn move_game<R: Runtime>(app: &AppHandle<R>, id: &str, to: &str) -> Result
             let _ = std::fs::remove_dir_all(&dest_c);
             return Err(format!("Copying failed, nothing was moved: {e}"));
         }
+        Ok(false)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    commit_move(&journal, renamed, || library::update(app, |games| {
+        let g = games.iter_mut().find(|g| g.id == id).ok_or("The game was removed while moving. Its folders have been kept.")?;
+        if !same_path(&g.install_dir, &game.install_dir) { return Err("The install folder changed while moving. Its folders have been kept.".into()); }
+        g.install_dir = new_dir.clone();
+        Ok(())
+    }))?;
+    // Metadata now points at the verified complete destination. Only now is
+    // removing the original safe; an interrupted cleanup keeps a usable game.
+    let from_c = from.clone();
+    let leftover = if renamed { None } else { tauri::async_runtime::spawn_blocking(move || -> Option<String> {
         // The copy is complete, so the game now lives at the new place whatever
         // happens next. A file in the old folder can still be held open for a
         // moment (antivirus scanning it, a launcher that has not quit: os error
@@ -364,39 +469,27 @@ async fn move_game<R: Runtime>(app: &AppHandle<R>, id: &str, to: &str) -> Result
         for wait in [0u64, 1, 3, 6] {
             std::thread::sleep(std::time::Duration::from_secs(wait));
             match std::fs::remove_dir_all(&from_c) {
-                Ok(()) => return Ok(None),
+                Ok(()) => return None,
                 Err(e) if !from_c.exists() => {
                     let _ = e;
-                    return Ok(None);
+                    return None;
                 }
                 Err(e) => last = Some(e),
             }
         }
-        Ok(Some(format!(
+        Some(format!(
             "Moved. The old folder {} could not be removed ({}): something still has a file in it open. Delete it yourself once that is closed.",
             from_c.display(),
             last.map(|e| e.to_string()).unwrap_or_default(),
-        )))
+        ))
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())? };
     if let Some(note) = &leftover {
         crate::logging::warn("storage", &format!("moving {id}: {note}"));
     }
 
-    // The install dir may be a folder inside the game's folder; keep that part.
-    let rest = PathBuf::from(&game.install_dir)
-        .canonicalize()
-        .ok()
-        .and_then(|d| d.strip_prefix(&from).ok().map(Path::to_path_buf))
-        .unwrap_or_default();
-    let new_dir = if rest.as_os_str().is_empty() { dest.clone() } else { dest.join(rest) }.to_string_lossy().into_owned();
-    library::update(app, |games| {
-        if let Some(g) = games.iter_mut().find(|g| g.id == id) {
-            g.install_dir = new_dir.clone();
-        }
-        Ok(())
-    })?;
+    std::fs::remove_file(journal_path).map_err(|e| e.to_string())?;
     let _ = app.emit("storage-move", MoveProgress { id: id.to_string(), copied: total, total, done: true, error: leftover });
     let _ = app.emit("library-changed", ());
     Ok(())
@@ -425,6 +518,98 @@ pub fn check_room(folder: &Path, needed: u64, what: &str) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture() -> (PathBuf, MoveJournal) {
+        let root = std::env::temp_dir().join(format!("kryoto-move-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&root).unwrap();
+        let from = root.join("old");
+        let dest = root.join("new");
+        std::fs::create_dir_all(from.join("bin")).unwrap();
+        std::fs::write(from.join("bin/game.exe"), "fixture").unwrap();
+        let from = from.canonicalize().unwrap();
+        let journal = MoveJournal { id: "fixture".into(), old_dir: from.join("bin").to_string_lossy().into_owned(), new_dir: dest.join("bin").to_string_lossy().into_owned(), from, dest };
+        (root, journal)
+    }
+
+    #[test]
+    fn nested_launch_folder_is_captured_before_rename() {
+        let (root, journal) = fixture();
+        let suffix = install_suffix(&journal.from, Path::new(&journal.old_dir)).unwrap();
+        assert_eq!(suffix, PathBuf::from("bin"));
+        assert!(install_suffix(&journal.from, &root).is_err());
+        std::fs::rename(&journal.from, &journal.dest).unwrap();
+        assert!(journal.dest.join(suffix).join("game.exe").exists());
+        assert!(install_suffix(&journal.from, Path::new(&journal.old_dir)).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_failure_rolls_back_rename_and_preserves_a_copied_original() {
+        for renamed in [true, false] {
+            let (root, journal) = fixture();
+            if renamed { std::fs::rename(&journal.from, &journal.dest).unwrap(); }
+            else { copy_tree(&journal.from, &journal.dest, &mut |_| {}).unwrap(); }
+            assert!(commit_move(&journal, renamed, || Err("injected save failure".into())).is_err());
+            assert!(journal.from.join("bin/game.exe").exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn successful_root_and_nested_copies_keep_the_original_until_metadata_is_saved() {
+        for nested in [false, true] {
+            let (root, mut journal) = fixture();
+            if !nested {
+                journal.old_dir = journal.from.to_string_lossy().into_owned();
+                journal.new_dir = journal.dest.to_string_lossy().into_owned();
+            }
+            let suffix = install_suffix(&journal.from, Path::new(&journal.old_dir)).unwrap();
+            copy_tree(&journal.from, &journal.dest, &mut |_| {}).unwrap();
+            commit_move(&journal, false, || {
+                assert!(journal.from.join("bin/game.exe").exists());
+                assert!(journal.dest.join(&suffix).is_dir());
+                assert_eq!(std::fs::read(journal.dest.join("bin/game.exe")).unwrap(), b"fixture");
+                Ok(())
+            }).unwrap();
+            recover_paths(&journal, &journal.new_dir).unwrap();
+            assert!(journal.from.exists() && journal.dest.exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_rollback_and_missing_committed_folder_keep_recovery_evidence() {
+        let (root, journal) = fixture();
+        let record = root.join("move.json");
+        save_journal(&record, &journal).unwrap();
+        std::fs::rename(&journal.from, &journal.dest).unwrap();
+        // An unrelated file at the old path prevents rollback; keep the game
+        // and its journal rather than replacing the new file.
+        std::fs::write(&journal.from, "unrelated file").unwrap();
+        let error = commit_move(&journal, true, || Err("injected save failure".into())).unwrap_err();
+        assert!(error.contains("recovery record has been kept"));
+        assert!(record.exists() && journal.dest.join("bin/game.exe").exists());
+        assert_eq!(std::fs::read_to_string(&journal.from).unwrap(), "unrelated file");
+        std::fs::remove_file(&journal.from).unwrap();
+        std::fs::rename(&journal.dest, &journal.from).unwrap();
+        assert!(recover_paths(&journal, &journal.new_dir).is_err());
+        assert!(record.exists() && journal.from.join("bin/game.exe").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_restores_uncommitted_rename_and_keeps_committed_destination() {
+        let (root, journal) = fixture();
+        save_journal(&root.join("move.json"), &journal).unwrap();
+        std::fs::rename(&journal.from, &journal.dest).unwrap();
+        recover_paths(&journal, &journal.old_dir).unwrap();
+        assert!(journal.from.join("bin/game.exe").exists());
+        std::fs::rename(&journal.from, &journal.dest).unwrap();
+        recover_paths(&journal, &journal.new_dir).unwrap();
+        assert!(journal.dest.join("bin/game.exe").exists());
+        assert!(recover_paths(&journal, "unrelated edit").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_game_folder_is_the_first_folder_under_the_library() {

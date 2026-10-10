@@ -507,7 +507,7 @@ export function FriendsPage({
               <Plan icon={<Gamepad2 />} title="Game invites" body="See what friends are playing and invite them to yours." />
               <Plan icon={<ShieldCheck />} title="Safety" body="Block anyone, and report a message straight to staff." />
             </ul>
-            <Button onClick={onDiscord}>Talk on Discord for now</Button>
+            <Button onClick={onDiscord}>Open Discord</Button>
           </>
         )}
       </section>

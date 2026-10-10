@@ -8,7 +8,10 @@
 //! something moves. Only a kryo.to page in the Store may call either.
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State, Webview};
+use tauri::{AppHandle, Manager, State, Webview};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::io::Write;
 
 use crate::downloads::{self, Downloads};
 
@@ -32,6 +35,7 @@ pub struct RemoteItem {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    protocol: u8,
     install_id: String,
     name: String,
     version: String,
@@ -76,6 +80,7 @@ pub fn remote_snapshot(app: AppHandle, webview: Webview, state: State<'_, Downlo
         })
         .collect();
     Ok(Snapshot {
+        protocol: 2,
         install_id: crate::logging::install_id(&app),
         name: sysinfo::System::host_name().unwrap_or_else(|| "Kryoto Desktop".into()),
         version: app.package_info().version.to_string(),
@@ -87,6 +92,7 @@ pub fn remote_snapshot(app: AppHandle, webview: Webview, state: State<'_, Downlo
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteCommand {
+    id: String,
     kind: String,
     url: Option<String>,
     slug: Option<String>,
@@ -95,38 +101,141 @@ pub struct RemoteCommand {
 }
 
 /// Do what kryo.to queued: start a download (from kryo.to's own filehost only),
-/// or pause, resume or cancel one. Returns how many were done.
+/// or pause, resume or cancel one. Confirm each durable acceptance separately.
 #[tauri::command]
-pub fn remote_apply(app: AppHandle, webview: Webview, state: State<'_, Downloads>, commands: Vec<RemoteCommand>) -> Result<usize, String> {
+pub fn remote_apply(app: AppHandle, webview: Webview, state: State<'_, Downloads>, commands: Vec<RemoteCommand>) -> Result<Vec<RemoteResult>, String> {
     from_store(&app, &webview)?;
+    let _guard = APPLY.lock().map_err(|_| "remote command lock poisoned")?;
     let settings = crate::settings::load(&app);
-    let mut done = 0;
+    let file = app.path().app_data_dir().map_err(|e| e.to_string())?.join("remote-receipts.json");
+    let mut receipts = read_receipts(&file)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+    receipts.retain(|_, at| now.saturating_sub(*at) < 30 * 86400);
+    let mut results = Vec::new();
     for c in commands.into_iter().take(20) {
-        match c.kind.as_str() {
+        let id = c.id.clone();
+        if id.is_empty() || id.len() > 19 || !id.bytes().all(|b| b.is_ascii_digit()) {
+            results.push(RemoteResult { id, error: Some("Invalid remote command ID.".into()), retryable: false });
+            continue;
+        }
+        let accepted = accept_once(&file, &mut receipts, &id, now, || -> Result<(), String> { match c.kind.as_str() {
             "download" => {
-                let Some(url) = c.url.as_deref().and_then(|u| url::Url::parse(u).ok()) else { continue };
+                let url = c.url.as_deref().and_then(|u| url::Url::parse(u).ok()).ok_or("Invalid download URL.")?;
                 if !downloads::is_ours(&url, &settings) {
-                    continue;
+                    return Err("This download does not come from Kryoto.".into());
                 }
                 let slug = c.slug.filter(|s| !s.is_empty() && s.len() <= 160 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
                 let title = c.title.map(|t| t.chars().filter(|ch| !ch.is_control()).take(200).collect::<String>()).filter(|t| !t.is_empty());
                 crate::logging::info("remote", &format!("queued from kryo.to: {}", title.as_deref().unwrap_or("a game")));
-                downloads::enqueue(&app, url.to_string(), slug, title);
-                done += 1;
+                downloads::enqueue_remote(&app, &id, url.to_string(), slug, title)?;
             }
             "pause" | "resume" | "cancel" => {
-                let Some(id) = c.download_id.filter(|i| !i.is_empty() && i.len() <= 80) else { continue };
-                match c.kind.as_str() {
-                    "pause" => downloads::download_pause(app.clone(), state.clone(), id),
-                    "resume" => {
-                        let _ = downloads::download_resume(app.clone(), id);
-                    }
-                    _ => downloads::download_cancel(app.clone(), state.clone(), id),
+                let download_id = c.download_id.filter(|i| !i.is_empty() && i.len() <= 80).ok_or("Invalid download ID.")?;
+                let current = downloads::snapshot(&app, &download_id).ok_or("That download is no longer in the list.")?;
+                if current.status == downloads::Status::Installed {
+                    return Err("That download has already finished transferring.".into());
                 }
-                done += 1;
+                match c.kind.as_str() {
+                    "pause" => {
+                        downloads::download_pause(app.clone(), state.clone(), download_id.clone());
+                        downloads::remote_control(&app, &download_id, downloads::Status::Paused)?;
+                    }
+                    "resume" => {
+                        downloads::download_resume(app.clone(), download_id)?;
+                        downloads::persist_checked(&app)?;
+                    }
+                    _ => {
+                        downloads::download_cancel(app.clone(), state.clone(), download_id.clone());
+                        downloads::remote_control(&app, &download_id, downloads::Status::Canceled)?;
+                    }
+                }
             }
-            _ => {}
+            _ => return Err("Unknown remote action.".into()),
+        } Ok(()) });
+        let error = accepted.err();
+        if let Some(e) = &error {
+            receipts.remove(&id);
+            crate::logging::error("remote", e);
         }
+        let retryable = error.as_deref().is_none_or(retryable_error);
+        results.push(RemoteResult { id, error, retryable });
     }
-    Ok(done)
+    Ok(results)
+}
+
+static APPLY: Mutex<()> = Mutex::new(());
+
+fn retryable_error(error: &str) -> bool {
+    !matches!(error, "Invalid remote command ID." | "Invalid download URL." | "Invalid download ID." |
+        "This download does not come from Kryoto." | "That download is no longer in the list." |
+        "That download has already finished transferring." | "Unknown remote action.")
+}
+
+fn read_receipts(file: &std::path::Path) -> Result<BTreeMap<String, u64>, String> {
+    match std::fs::read_to_string(file) {
+        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("Remote receipts could not be read: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+        Err(e) => Err(format!("Remote receipts could not be read: {e}")),
+    }
+}
+
+fn accept_once(file: &std::path::Path, receipts: &mut BTreeMap<String, u64>, id: &str, now: u64, apply: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    if receipts.contains_key(id) { return Ok(()); }
+    apply()?;
+    receipts.insert(id.into(), now);
+    let saved = (|| -> Result<(), String> {
+        let tmp = file.with_extension("json.tmp");
+        let mut output = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        output.write_all(&serde_json::to_vec(receipts).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        output.sync_all().map_err(|e| e.to_string())?;
+        drop(output);
+        std::fs::rename(tmp, file).map_err(|e| e.to_string())
+    })();
+    if let Err(e) = saved {
+        receipts.remove(id);
+        return Err(format!("Could not save remote receipt: {e}"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_targets_are_permanent_but_persistence_and_settling_are_retryable() {
+        assert!(!retryable_error("That download is no longer in the list."));
+        assert!(!retryable_error("This download does not come from Kryoto."));
+        assert!(retryable_error("Could not save remote receipt: access denied"));
+        assert!(retryable_error("Wait for the download to stop, then try again."));
+    }
+
+    #[test]
+    fn durable_receipt_recognizes_a_retry_after_restart() {
+        let dir = std::env::temp_dir().join(format!("kryoto-receipts-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("receipts.json");
+        let mut receipts = read_receipts(&file).unwrap();
+        let mut applied = 0;
+        accept_once(&file, &mut receipts, "123", 1, || { applied += 1; Ok(()) }).unwrap();
+        let mut restarted = read_receipts(&file).unwrap();
+        accept_once(&file, &mut restarted, "123", 2, || { applied += 1; Ok(()) }).unwrap();
+        assert_eq!(applied, 1);
+        assert_eq!(restarted.get("123"), Some(&1));
+        assert!(accept_once(&file, &mut restarted, "124", 3, || Err("native rejection".into())).is_err());
+        assert!(!read_receipts(&file).unwrap().contains_key("124"));
+        let unwritable = dir.join("missing-parent/receipts.json");
+        assert!(accept_once(&unwritable, &mut restarted, "125", 4, || Ok(())).is_err());
+        assert!(!restarted.contains_key("125"));
+        std::fs::write(&file, "damaged receipt").unwrap();
+        assert!(read_receipts(&file).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[derive(Serialize)]
+pub struct RemoteResult {
+    id: String,
+    error: Option<String>,
+    retryable: bool,
 }

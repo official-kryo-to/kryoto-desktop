@@ -7,6 +7,7 @@ export type Radius = 'sharp' | 'soft' | 'rounded' | 'round' | 'pill'
 
 /** Mirrors `src-tauri/src/settings.rs`. */
 export type Settings = {
+  recoveryError?: string | null
   libraryDir: string
   deleteArchives: boolean
   startPage: 'store' | 'library'
@@ -70,7 +71,11 @@ export const RADII: { value: Radius; label: string }[] = [
   { value: 'pill', label: 'Pill' },
 ]
 
-export type Look = Pick<Settings, 'palette' | 'radius' | 'font' | 'showAdult'> & { reducedMotion?: boolean }
+export type Look = Pick<Settings, 'palette' | 'radius' | 'font' | 'showAdult'> & {
+  reducedMotion?: boolean
+  /** kryo.to's "Hide" for adult games: left out of every list the client draws from kryo.to. */
+  hideAdult?: boolean
+}
 
 /** What a kryo.to account says about its look (`/api/auth/me`). */
 export type AccountAppearance = {
@@ -78,6 +83,8 @@ export type AccountAppearance = {
   radius: string | null
   typeface: string | null
   nsfwBlur: boolean
+  /** kryo.to's "Hide adult games" (Settings > Appearance on the site). */
+  nsfwHide?: boolean
   /** kryo.to's "reduce motion": no press, no animations. */
   motion?: string | null
 }
@@ -97,7 +104,8 @@ export function effectiveLook(s: Settings, account: { appearance?: AccountAppear
     palette: (a.palette && PALETTE_IDS.has(a.palette) ? a.palette : 'monochrome') as Palette,
     radius: (a.radius && RADIUS_IDS.has(a.radius) ? a.radius : 'pill') as Radius,
     font: a.typeface === 'mono' ? 'mono' : 'teletext',
-    showAdult: !a.nsfwBlur,
+    showAdult: !a.nsfwBlur && !a.nsfwHide,
+    hideAdult: a.nsfwHide === true,
     reducedMotion: a.motion === 'reduced',
   }
 }
@@ -134,6 +142,11 @@ export const displayApi = {
 }
 
 export const settingsApi = {
+  recover: async () => {
+    const settings = await call<Settings>('settings_recover')
+    publish(settings)
+    return settings
+  },
   /** The K// username games get, remembered from the last sign-in. Null for a guest. */
   playerAccountName: () => call<string | null>('player_account_name'),
   get: async () => {

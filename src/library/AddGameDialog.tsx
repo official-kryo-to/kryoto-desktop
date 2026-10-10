@@ -4,7 +4,7 @@ import { ArrowLeft, Download, FolderOpen, Search } from 'lucide-react'
 import { AsciiBar, Button, Modal, Section, inputCls } from '@/ui'
 import { errorText, isTauri } from '@/lib/bridge'
 import { fetchCatalogGame, library, slugFrom, type CatalogGame, type LibraryGame } from '@/lib/library'
-import { adultBlur, useShowAdult } from '@/lib/adult'
+import { adultBlur, useHideAdult, useShowAdult, withoutAdult } from '@/lib/adult'
 import { cn } from '@/lib/utils'
 import { catalogApiUrl } from '@/lib/endpoint'
 
@@ -12,7 +12,7 @@ type Hit = { slug: string; title: string; developer: string | null; year: number
 
 async function search(q: string): Promise<Hit[]> {
   const res = await fetch(await catalogApiUrl(`/api/games/search?q=${encodeURIComponent(q)}&limit=6`))
-  if (!res.ok) return []
+  if (!res.ok) throw new Error('Search is unavailable right now. Try again.')
   return ((await res.json()) as { results?: Hit[] }).results ?? []
 }
 
@@ -33,8 +33,12 @@ export function AddGameDialog({
   onClose: () => void
 }) {
   const showAdult = useShowAdult()
+  const hideAdult = useHideAdult()
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<Hit[] | null>(null)
+  const [searchError, setSearchError] = useState(false)
+  const [searching, setSearching] = useState(false)
+  const [retry, setRetry] = useState(0)
   const [found, setFound] = useState<CatalogGame | null>(null)
   const [manual, setManual] = useState(false)
   const [title, setTitle] = useState('')
@@ -69,18 +73,22 @@ export function AddGameDialog({
       void pick(slug)
       return
     }
-    if (q.length < 2) return setHits(null)
+    setSearchError(false)
+    setHits(null)
+    if (q.length < 2) { setSearching(false); return }
+    setSearching(true)
     let cancelled = false
     const t = window.setTimeout(() => {
       void search(q)
-        .then((h) => !cancelled && setHits(h))
-        .catch(() => !cancelled && setHits([]))
+        .then((h) => !cancelled && setHits(withoutAdult(h, hideAdult)))
+        .catch(() => !cancelled && setSearchError(true))
+        .finally(() => !cancelled && setSearching(false))
     }, 180)
     return () => {
       cancelled = true
       window.clearTimeout(t)
     }
-  }, [query])
+  }, [query, retry])
 
   async function chooseExe() {
     setError(null)
@@ -183,6 +191,11 @@ export function AddGameDialog({
             />
           </label>
           {looking ? <AsciiBar fraction={null} cells={18} showPct={false} className="text-muted-foreground" /> : null}
+          {searching ? <p role="status" className="text-xs text-muted-foreground">Searching…</p> : null}
+          {searchError ? <div role="alert" className="grid gap-2 text-xs text-destructive">
+            <p>Search is unavailable right now. Try again.</p>
+            <Button size="sm" onClick={() => setRetry(n => n + 1)}>Retry</Button>
+          </div> : null}
           {hits && hits.length ? (
             <ul className="grid gap-1">
               {hits.map((h) => (

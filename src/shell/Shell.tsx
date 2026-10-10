@@ -11,6 +11,8 @@ import {
   Trash2,
   User,
   Layers,
+  ScrollText,
+  Wine,
 } from 'lucide-react'
 import { Button, Check, ContextMenu, Modal, type MenuEntry } from '@/ui'
 import { KryoMorph } from '@/ui/ascii/KryoMorph'
@@ -49,7 +51,7 @@ import { call, errorText, on } from '@/lib/bridge'
 import { logError } from '@/lib/log'
 import { flushPlays, isExpectedReportError, reportPlay } from '@/lib/play-reports'
 import { DISCORD_URL, REDDIT_URL, SOURCE_URL, YOUTUBE_URL } from '@/lib/community'
-import { entryIsVr, entryLabel, library, playTarget, type LibraryGame } from '@/lib/library'
+import { entryIsVr, entryLabel, gameLogs, isWindowsHost, library, playTarget, type LibraryGame } from '@/lib/library'
 import { exitApp, isTauri, openExternal, setStoreVisible, signOut, toggleFullscreen } from '@/lib/window'
 
 type Browser = ReturnType<typeof useBrowserPage>
@@ -57,7 +59,7 @@ type Browser = ReturnType<typeof useBrowserPage>
 type Overlay =
   | { kind: 'add'; slug: string | null }
   | { kind: 'choose'; id: string }
-  | { kind: 'props'; id: string; tab?: 'versions' }
+  | { kind: 'props'; id: string; tab?: 'versions' | 'logs' }
   | { kind: 'uninstall'; id: string }
   | { kind: 'about' }
 
@@ -98,7 +100,8 @@ function slugOnPage(url: string, catalogEndpoint?: string): string | null {
 export function Shell({ startPage, account, browser }: { startPage: 'store' | 'library'; account: Account; browser: Browser }) {
   const lib = useLibrary()
   const { inbox, news, markAllRead } = useInbox()
-  const dl = useDownloads()
+  const downloadState = useDownloads()
+  const dl = downloadState.list
   const dlRef = useRef(dl)
   dlRef.current = dl
   const saved = useSaved()
@@ -193,7 +196,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
   // Menus open in their own window over the Store; only dialogs hide it.
   const online = useOnline()
   const storeVisible =
-    online && (view.kind === 'web' || (view.kind === 'settings' && isWebSection(view.section))) && !overlay && !page.error
+    online && (view.kind === 'web' || (view.kind === 'settings' && isWebSection(view.section))) && !overlay && !page.error && !settings?.recoveryError
   // A guest has no kryo.to settings to show; the client's own are all there is.
   const openSettings = useCallback(
     (section: SettingsSection = 'general') => go({ kind: 'settings', section: guest && isWebSection(section) ? 'general' : section }),
@@ -434,6 +437,28 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
       icon: <FolderOpen />,
       onSelect: () => void library.openFolder(g.installDir).catch((e) => lib.setError(errorText(e))),
     },
+    // Where Wine or Proton keeps this game's Windows: saves, settings, crash
+    // dumps. Linux only; Windows runs the game itself.
+    ...(!isWindowsHost()
+      ? [
+          {
+            label: 'Browse Wine prefix',
+            icon: <Wine />,
+            onSelect: () =>
+              void gameLogs
+                .prefix(g.id)
+                .then((dir) =>
+                  dir
+                    ? library.openFolder(dir)
+                    : lib.setError('This game has no Wine prefix yet. It is made the first time the game starts.', true),
+                )
+                .catch((e) => lib.setError(errorText(e))),
+          },
+        ]
+      : []),
+    // One log per Play press, with everything the game (and Wine) printed
+    // when it crashed: here, not three clicks down in Properties.
+    { label: 'Logs', icon: <ScrollText />, onSelect: () => setOverlay({ kind: 'props', id: g.id, tab: 'logs' }) },
     ...(g.slug ? [{ label: 'Store page', icon: <Globe />, onSelect: () => openWeb(`/game/${g.slug}`) }] : []),
     { separator: true },
     { label: 'Uninstall', icon: <Trash2 />, danger: true, onSelect: () => setOverlay({ kind: 'uninstall', id: g.id }) },
@@ -537,7 +562,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
         { label: 'Home', onSelect: () => openWeb('/') },
         { label: 'Browse', onSelect: () => openWeb('/browse') },
         { label: 'Requests', onSelect: () => openWeb('/requests') },
-        { label: 'Stats', onSelect: () => openWeb('/stats') },
+        { label: 'Stats', onSelect: () => openWeb('/community?tab=stats') },
       ],
     },
     {
@@ -557,7 +582,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
       items: [
         { label: 'Statistics', onSelect: () => go({ kind: 'community' }) },
         { label: 'Blog', onSelect: () => openWeb('/blog') },
-        { label: 'Collections', onSelect: () => openWeb('/collections') },
+        { label: 'Collections', onSelect: () => openWeb('/collections/discover') },
         { label: 'Requests', onSelect: () => openWeb('/requests') },
         { separator: true },
         { label: 'Discord', icon: <ArrowUpRight />, onSelect: () => void openExternal(DISCORD_URL) },
@@ -574,6 +599,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
           items: [
             { label: 'Profile', onSelect: () => openWeb(`/user/${username}`) },
             { label: 'Saved games', onSelect: () => openWeb('/library') },
+            { label: 'My collections', onSelect: () => openWeb('/library?tab=collections') },
             { label: 'Friends & chat', onSelect: () => go({ kind: 'friends' }) },
             { label: 'Notifications', onSelect: () => openWeb('/notifications') },
             { label: 'Settings', onSelect: () => openSettings('profile') },
@@ -676,6 +702,9 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
     content = (
       <div className="absolute inset-0 flex bg-background">
         <DownloadsPage
+          loading={downloadState.loading}
+          error={downloadState.error}
+          onRetry={downloadState.retry}
           list={dl}
           onOpenGame={(id) => go({ kind: 'game', id })}
           onStore={() => openWeb('/')}

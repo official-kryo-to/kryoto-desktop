@@ -105,20 +105,38 @@ export function phaseOf(d: Download): string {
 /** The live list, kept current by the `downloads` event. */
 export function useDownloads() {
   const [list, setList] = useState<Download[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     let stop: (() => void) | undefined
     let cancelled = false
-    void downloads.list().then((l) => !cancelled && setList(l)).catch(() => {})
-    void on<Download[]>('downloads', (l) => setList(l)).then((fn) => {
+    let receivedEvent = false
+    setLoading(true)
+    setError(null)
+    void downloads.list().then((l) => {
+      if (!cancelled && !receivedEvent) { setList(l); setLoading(false) }
+    }).catch(() => {
+      if (!cancelled && !receivedEvent) { setError('Couldn’t load your downloads. Try again.'); setLoading(false) }
+    })
+    void on<Download[]>('downloads', (l) => {
+      if (cancelled) return
+      receivedEvent = true
+      setList(l)
+      setLoading(false)
+      setError(null)
+    }).then((fn) => {
       if (cancelled) fn()
       else stop = fn
+    }).catch(() => {
+      if (!cancelled) setError('Couldn’t watch download updates. Try again.')
     })
     return () => {
       cancelled = true
       stop?.()
     }
-  }, [])
-  return list
+  }, [attempt])
+  return { list, loading, error, retry: () => setAttempt(n => n + 1) }
 }
 
 export function formatBytes(n: number | null | undefined): string {

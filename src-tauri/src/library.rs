@@ -107,7 +107,11 @@ fn save<R: Runtime>(app: &AppHandle<R>, games: &[LibraryGame]) -> Result<(), Str
     let dir = data_dir(app)?;
     let tmp = dir.join("library.json.tmp");
     let json = serde_json::to_string_pretty(games).map_err(|e| e.to_string())?;
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    use std::io::Write;
+    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
     std::fs::rename(&tmp, dir.join("library.json")).map_err(|e| e.to_string())
 }
 
@@ -243,6 +247,27 @@ pub(crate) fn dir_size(path: &Path) -> u64 {
 }
 
 /// Bytes the game's folder takes, for Installed Files.
+/// A game's Wine prefix, for "Browse Wine prefix" in its Manage menu: the
+/// folder Wine or Proton keeps its Windows in (the C: drive, the registry,
+/// most saves and crash dumps). `None` until the game has been started once,
+/// and always on Windows, where there is none.
+#[tauri::command]
+pub fn library_prefix_folder(app: AppHandle, id: String) -> Result<Option<String>, String> {
+    if cfg!(windows) {
+        return Ok(None);
+    }
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("Not a game.".into());
+    }
+    let root = data_dir(&app)?.join("prefixes").join(&id);
+    if !root.is_dir() {
+        return Ok(None);
+    }
+    // Proton keeps the prefix proper one level down, beside its own files.
+    let pfx = root.join("pfx");
+    Ok(Some((if pfx.is_dir() { pfx } else { root }).to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 pub async fn game_disk_size(install_dir: String) -> Result<u64, String> {
     tauri::async_runtime::spawn_blocking(move || dir_size(Path::new(&install_dir)))
