@@ -19,6 +19,7 @@ commands.allow = [
   "game_logs_folder",
   "library_prefix_folder",
   "pad_start",
+  "shell_theme",
   "pad_stop",
   "pad_list",
   "pad_config_get",

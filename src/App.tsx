@@ -6,7 +6,7 @@ import { applyLook, effectiveLook, settingsApi, useSettings } from '@/lib/settin
 import { errorText } from '@/lib/bridge'
 import { Button } from '@/ui'
 import { setHideAdult, setShowAdult } from '@/lib/adult'
-import { GUEST, useAccount } from '@/hooks/useAccount'
+import { GUEST, useAccount, useCatalogTheme } from '@/hooks/useAccount'
 import { useBrowserPage } from '@/hooks/useBrowserPage'
 import { call } from '@/lib/bridge'
 import { logInfo } from '@/lib/log'
@@ -54,6 +54,7 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>('splash')
   const settings = useSettings()
   const account = useAccount()
+  const catalogTheme = useCatalogTheme()
   const browser = useBrowserPage()
   const online = useOnline()
   const [guest, setGuestState] = useState(loadGuest)
@@ -69,11 +70,18 @@ export default function App() {
   // The look: the account's when Settings follows it, otherwise the client's.
   useEffect(() => {
     if (!settings) return
-    const look = effectiveLook(settings, account)
-    applyLook(look)
+    const look = effectiveLook(settings, account, catalogTheme)
+    const apply = () => {
+      applyLook(look)
+      if (isTauri()) void call('shell_theme', { dark: document.documentElement.classList.contains('dark') }).catch(() => {})
+    }
+    apply()
+    const system = matchMedia('(prefers-color-scheme: dark)')
+    if (look.theme === 'system') system.addEventListener('change', apply)
     setShowAdult(look.showAdult)
     setHideAdult(look.hideAdult === true)
-  }, [settings, account])
+    return () => system.removeEventListener('change', apply)
+  }, [settings, account, catalogTheme])
 
   useEffect(() => {
     void applyWindow('splash')

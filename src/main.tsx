@@ -24,6 +24,8 @@ const label = windowLabel()
 document.documentElement.dataset.window = label
 installErrorLogging(label)
 installWindowDrag()
+// Keep custom app menus; never expose the browser's Back/Forward/Reload menu.
+document.addEventListener('contextmenu', e => e.preventDefault())
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

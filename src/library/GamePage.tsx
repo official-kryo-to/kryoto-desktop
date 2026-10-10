@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { gameContext } from './context'
 import { ChevronDown, Download, FolderOpen, Glasses, Globe, Play, Settings2, Square, X } from 'lucide-react'
 import { Button, Caption, Card, CommandLine, IconButton, Label, MenuList, useDismiss, type MenuEntry } from '@/ui'
 import { entryIsVr, entryLabel, fetchCatalogGame, hasChoice, library, playTarget, type CatalogGame, type LibraryGame } from '@/lib/library'
@@ -33,6 +34,7 @@ export function GamePage({
   savedStatus,
   onSetStatus,
   onGameChanged,
+  onContext,
 }: {
   game: LibraryGame
   running: boolean
@@ -49,6 +51,7 @@ export function GamePage({
   savedStatus?: SavedStatus | null
   onSetStatus?: (status: SavedStatus | null) => void
   onGameChanged?: (g: LibraryGame) => void
+  onContext?: (x: number, y: number) => void
 }) {
   const [latest, setLatest] = useState<string | null>(null)
   const [command, setCommand] = useState<string>('')
@@ -108,7 +111,7 @@ export function GamePage({
   const updateAvailable = !!latest && !!game.version && latest !== game.version && !kept
 
   return (
-    <section aria-label={game.title} className="min-h-0 grow overflow-auto">
+    <section aria-label={game.title} className="min-h-0 grow overflow-auto" {...gameContext(onContext)}>
       <GameBanner
         title={game.title}
         adult={game.nsfw}

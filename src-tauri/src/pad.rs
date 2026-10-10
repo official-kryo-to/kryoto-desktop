@@ -49,6 +49,7 @@ pub struct Pads {
 
 enum Req {
     Start,
+    Refresh,
     Stop,
     Rumble(u32),
     Haptic(u32, Haptic),
@@ -414,6 +415,7 @@ pub fn pad_virtual_driver(pads: State<'_, Pads>) -> bool {
         if let Ok(mut d) = pads.driver.lock() {
             *d = Some(found);
         }
+        send(&pads, Req::Refresh);
         found
     }
     #[cfg(not(windows))]
@@ -491,6 +493,7 @@ struct RawState {
     id: u32,
     axes: Vec<f32>,
     hats: Vec<u8>,
+    buttons: Vec<bool>,
 }
 
 struct Dev {
@@ -503,6 +506,14 @@ struct Dev {
 
 fn guid_of(joy: &Joystick) -> String {
     joy.guid().string()
+}
+
+/// Windows briefly enumerates a dead WGI copy of the wired Stratus+ while
+/// removing its XInput interface. Keep its working XInput interface; the
+/// Bluetooth model (0x0111) and other WGI controllers remain available.
+#[cfg(any(windows, test))]
+fn inactive_stratus_interface(vendor: u16, product: u16, guid: &str) -> bool {
+    vendor == 0x1038 && product == 0x1434 && guid.get(28..30) == Some("77")
 }
 
 fn battery_of(joy: &Joystick) -> (Option<u8>, bool) {
@@ -550,7 +561,7 @@ impl<R: Runtime> Reader<'_, R> {
     }
 
     /// Open device `index` (SDL's enumeration index), unless it is open or ours.
-    fn open(&mut self, index: u32) -> Option<u32> {
+    fn open(&mut self, index: u32, announce: bool) -> Option<u32> {
         let i = index as i32;
         let id = unsafe { sdl2::sys::SDL_JoystickGetDeviceInstanceID(i) };
         if id < 0 {
@@ -574,6 +585,11 @@ impl<R: Runtime> Reader<'_, R> {
         let some = |v: u16| (v != 0).then_some(v);
         let model = padmap::identify(some(vendor), some(product), &system_name);
         let guid = guid_of(&joy);
+        #[cfg(windows)]
+        if inactive_stratus_interface(vendor, product, &guid) {
+            self.ignored.insert(id);
+            return None;
+        }
         let custom = load_config(self.app).pads.get(&guid).is_some_and(|p| p.mapping.is_some());
         let (battery, charging) = battery_of(&joy);
         use sdl2::sys::SDL_GameControllerType::*;
@@ -597,35 +613,39 @@ impl<R: Runtime> Reader<'_, R> {
         };
         // Remember SDL's own mapping (not a setup saved here) as the base.
         let base = if custom { None } else { ctl.as_ref().map(|c| c.mapping()) };
-        let fresh = {
-            let mut fresh = false;
+        {
             let _ = update_config(self.app, |c| {
-                let p = c.pads.entry(guid.clone()).or_insert_with(|| {
-                    fresh = true;
-                    PadPrefs::default()
-                });
+                let p = c.pads.entry(guid.clone()).or_default();
                 p.name = info.name.clone();
                 if base.is_some() {
                     p.base = base.clone();
                 }
                 p.sdl = sdl_line(p);
             });
-            fresh
-        };
+        }
         let axes = joy.num_axes() as usize;
         self.devs.insert(id, Dev { joy, ctl, info: info.clone(), raw_axes: vec![0.0; axes] });
-        if fresh && load_config(self.app).notify {
+        if announce && load_config(self.app).notify {
             ask_to_configure(self.app, &info);
         }
         Some(id)
     }
 
     fn open_all(&mut self) {
+        let mut changed = false;
+        let gone: Vec<u32> = self.devs.iter().filter(|(_, d)| !d.joy.attached()).map(|(id, _)| *id).collect();
+        for id in gone {
+            self.devs.remove(&id);
+            #[cfg(windows)]
+            self.virt.unplug(id);
+            if self.capture == Some(id) { self.capture = None; }
+            changed = true;
+        }
         let n = self.js.num_joysticks().unwrap_or(0);
         for i in 0..n {
-            self.open(i);
+            changed |= self.open(i, true).is_some();
         }
-        self.publish();
+        if changed { self.publish(); }
     }
 
     fn close_all(&mut self) {
@@ -653,7 +673,8 @@ impl<R: Runtime> Reader<'_, R> {
             self.devs.remove(&id);
             let n = self.js.num_joysticks().unwrap_or(0);
             if let Some(index) = (0..n).find(|i| unsafe { sdl2::sys::SDL_JoystickGetDeviceInstanceID(*i as i32) } as u32 == id) {
-                self.open(index);
+                // A mapping change is not a new connection.
+                self.open(index, false);
             }
         }
         self.publish();
@@ -688,16 +709,13 @@ impl<R: Runtime> Reader<'_, R> {
             id,
             axes: (0..d.joy.num_axes()).map(|a| d.joy.axis(a).map(|v| v as f32 / 32767.0).unwrap_or(0.0)).collect(),
             hats: (0..d.joy.num_hats()).map(|h| d.joy.hat(h).map(|s| s as u8).unwrap_or(0)).collect(),
+            buttons: (0..d.joy.num_buttons()).map(|b| d.joy.button(b).unwrap_or(false)).collect(),
         })
     }
 
     fn handle(&mut self, ev: Event, dirty: &mut HashSet<u32>) {
         match ev {
-            Event::JoyDeviceAdded { which, .. } => {
-                if self.open(which).is_some() {
-                    self.publish();
-                }
-            }
+            Event::JoyDeviceAdded { which, .. } if self.open(which, true).is_some() => self.publish(),
             Event::JoyDeviceRemoved { which, .. } => {
                 self.ignored.remove(&which);
                 if self.devs.remove(&which).is_some() {
@@ -749,9 +767,11 @@ impl<R: Runtime> Reader<'_, R> {
     }
 }
 
-/// First sight of a pad (`fresh`): "Kryoto detected a controller", with a
+/// Each connection: "Kryoto detected a controller", with a
 /// Configure button that opens Settings > Controller on it.
 fn ask_to_configure<R: Runtime>(app: &AppHandle<R>, pad: &PadInfo) {
+    // Visible inside Kryoto even if Windows notifications are disabled.
+    let _ = app.emit_to("main", "pad-connected", pad);
     let mut note = notify_rust::Notification::new();
     note.summary("Kryoto detected a controller");
     if pad.mapped {
@@ -784,6 +804,11 @@ fn run<R: Runtime>(app: &AppHandle<R>, rx: mpsc::Receiver<Req>, back: mpsc::Send
     // Read in the background too: the virtual controller needs the pad while
     // a game has the focus. Kryoto itself still only acts while in front.
     sdl2::hint::set("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
+    // Real-machine Stratus+ test: RawInput enumerates the wired pad but loses
+    // its buttons/sticks; XInput reads all controls. HIDAPI and DirectInput
+    // still handle other controllers (including Bluetooth) as before.
+    #[cfg(windows)]
+    sdl2::hint::set("SDL_JOYSTICK_RAWINPUT", "0");
     let sdl = match sdl2::init() {
         Ok(s) => s,
         Err(e) => return crate::logging::error("pads", &format!("controllers unavailable: {e}")),
@@ -811,12 +836,14 @@ fn run<R: Runtime>(app: &AppHandle<R>, rx: mpsc::Receiver<Req>, back: mpsc::Send
         virt: virt::Virtual::new(back),
     };
     r.open_all();
+    r.publish();
 
     let mut active = true;
     let mut focus_at = Instant::now() - Duration::from_secs(1);
     let mut sent: HashMap<u32, Axes> = HashMap::new();
     let mut sent_at = Instant::now();
     let mut dirty: HashSet<u32> = HashSet::new();
+    let mut scan_at = Instant::now();
 
     loop {
         // Asks from the shell.
@@ -841,12 +868,18 @@ fn run<R: Runtime>(app: &AppHandle<R>, rx: mpsc::Receiver<Req>, back: mpsc::Send
                         for _ in pump.poll_iter() {}
                     }
                     r.open_all();
+                    r.publish();
                 }
                 Req::Stop => {
                     active = false;
                     r.close_all();
                 }
                 _ if !active => {}
+                Req::Refresh => {
+                    r.open_all();
+                    #[cfg(windows)]
+                    r.virt.refresh_driver();
+                }
                 Req::Rumble(id) => r.rumble(id, 0xb000, 0xb000, 300),
                 Req::Haptic(id, kind) => {
                     let (low, high, ms) = match kind {
@@ -873,6 +906,11 @@ fn run<R: Runtime>(app: &AppHandle<R>, rx: mpsc::Receiver<Req>, back: mpsc::Send
         }
         if !active {
             continue;
+        }
+        // Reconcile missed hotplug/driver-change notifications without restarting.
+        if scan_at.elapsed() >= Duration::from_secs(2) {
+            scan_at = Instant::now();
+            r.open_all();
         }
 
         if focus_at.elapsed() > Duration::from_millis(200) {
@@ -999,6 +1037,11 @@ mod virt {
 
         pub fn driver(&self) -> Option<bool> {
             self.driver
+        }
+
+        pub fn refresh_driver(&mut self) {
+            self.retry_at = Instant::now();
+            let _ = self.client();
         }
 
         /// Our own targets appear to SDL as Xbox 360 pads a moment after
@@ -1150,6 +1193,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_the_inactive_wired_stratus_interface_is_filtered() {
+        assert!(inactive_stratus_interface(0x1038, 0x1434, "0300a408381000003414000000007701"));
+        assert!(!inactive_stratus_interface(0x1038, 0x1434, "0300fa67381000003414000000007801"));
+        assert!(!inactive_stratus_interface(0x0111, 0x1434, "0300a408110100003414000000007701"));
+        assert!(!inactive_stratus_interface(0x045e, 0x028e, "0300a4085e0400008e02000000007701"));
+        assert!(!inactive_stratus_interface(0x1038, 0x1434, "invalid"));
+    }
+
+    #[test]
     fn config_defaults_and_old_files() {
         let c: PadConfig = serde_json::from_str("{}").unwrap();
         assert!(!c.enabled && c.navigate && c.notify && c.games && c.haptics && c.virtual_pad);
@@ -1187,7 +1239,7 @@ mod tests {
     #[test]
     fn a_placeholder_name_gives_way() {
         let model = padmap::identify(Some(0x0111), Some(0x1434), "As: 6 knop: 16 gamepad met kapschakelaar");
-        assert_eq!(display_name(&model, "As: 6 knop: 16 gamepad met kapschakelaar"), "SteelSeries controller");
+        assert_eq!(display_name(&model, "As: 6 knop: 16 gamepad met kapschakelaar"), "SteelSeries Stratus+");
         let model = padmap::identify(None, None, "8BitDo Pro 2");
         assert_eq!(display_name(&model, "8BitDo Pro 2"), "8BitDo Pro 2");
     }

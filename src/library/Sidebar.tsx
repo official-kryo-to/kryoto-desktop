@@ -8,6 +8,7 @@ import type { LibraryGame } from '@/lib/library'
 import { cn } from '@/lib/utils'
 import { adultBlur, useHideAdult, useShowAdult } from '@/lib/adult'
 import { STATUSES, STATUS_LABEL, useAdultFlags, type SavedEntry, type SavedStatus } from '@/hooks/useSaved'
+import { gameContext } from '@/library/context'
 
 type Shelf = 'installed' | 'saved' | SavedStatus
 
@@ -36,6 +37,8 @@ export function Sidebar({
   onSelect,
   onPlay,
   onContext,
+  onSavedContext,
+  onDownloadContext,
   onDownloads,
   saved,
   selectedSlug,
@@ -50,6 +53,8 @@ export function Sidebar({
   onSelect: (id: string) => void
   onPlay: (game: LibraryGame) => void
   onContext: (game: LibraryGame, x: number, y: number) => void
+  onSavedContext?: (game: SavedEntry, x: number, y: number) => void
+  onDownloadContext?: (download: Download, x: number, y: number) => void
   onDownloads: () => void
   saved: SavedEntry[]
   /** The kryo.to game (not on this PC) whose page is open. */
@@ -157,6 +162,7 @@ export function Sidebar({
                   title={game ? undefined : 'Not on this PC'}
                   onClick={() => (game ? onSelect(game.id) : onCatalogGame(e.slug))}
                   onDoubleClick={() => game && onPlay(game)}
+                  {...gameContext((x, y) => game ? onContext(game, x, y) : onSavedContext?.(e, x, y))}
                   className={cn(
                     'kryo-pill flex h-9 w-full items-center gap-2.5 px-2 text-left text-xs transition-colors',
                     (game ? game.id === selectedId : e.slug === selectedSlug)
@@ -186,10 +192,7 @@ export function Sidebar({
             aria-current={g.id === selectedId ? 'page' : undefined}
             onClick={() => onSelect(g.id)}
             onDoubleClick={() => onPlay(g)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              onContext(g, e.clientX, e.clientY)
-            }}
+            {...gameContext((x, y) => onContext(g, x, y))}
             className={cn(
               'kryo-pill flex h-9 w-full items-center gap-2.5 px-2 text-left text-xs transition-colors',
               g.id === selectedId ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
@@ -218,6 +221,7 @@ export function Sidebar({
                 key={d.id}
                 type="button"
                 onClick={onDownloads}
+                {...gameContext(onDownloadContext ? (x, y) => onDownloadContext(d, x, y) : undefined)}
                 className="kryo-pill grid w-full gap-1 px-2 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
               >
                 <span className="truncate">{d.meta.title}</span>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUpRight,
+  Download as DownloadIcon,
   FolderOpen,
   Globe,
   LogOut,
@@ -47,9 +48,9 @@ import { BigPicture } from '@/bigpicture/BigPicture'
 import { ControllerWelcome } from '@/controller/ControllerWelcome'
 import { PadHints } from '@/controller/PadHints'
 import { familyOf } from '@/lib/pad'
-import { setSavedStatus, useSaved } from '@/hooks/useSaved'
+import { setSavedStatus, useSaved, STATUSES, STATUS_LABEL, type SavedEntry } from '@/hooks/useSaved'
 import type { useBrowserPage } from '@/hooks/useBrowserPage'
-import { downloads, useDownloads } from '@/lib/downloads'
+import { downloads, useDownloads, type Download } from '@/lib/downloads'
 import { useOnline } from '@/lib/online'
 import { useSettings } from '@/lib/settings'
 import * as nav from '@/lib/history'
@@ -199,7 +200,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
 
   /* ── Overlays over the native web view ── */
   const [overlay, setOverlay] = useState<Overlay | null>(null)
-  const [ctx, setCtx] = useState<{ game: LibraryGame; x: number; y: number } | null>(null)
+  const [ctx, setCtx] = useState<({ game: LibraryGame } | { saved: Pick<SavedEntry, 'slug' | 'title' | 'cover'> } | { download: Download }) & { x: number; y: number } | null>(null)
   // Big Picture: full screen, over everything, the Store hidden under it.
   const [bigPicture, setBigPicture] = useState(false)
   // Menus open in their own window over the Store; only dialogs hide it.
@@ -492,8 +493,39 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
         ]
       : []),
     { separator: true },
+    ...(g.slug && !guest ? shelfMenu(g.slug, g) : []),
     ...manageMenu(g),
   ]
+  const shelfMenu = (slug: string, game?: Pick<LibraryGame, 'title' | 'cover'>): MenuEntry[] => [
+    { heading: 'On kryo.to' },
+    ...STATUSES.map(status => ({
+      label: STATUS_LABEL[status],
+      checked: saved.some(e => e.slug === slug && e.status === status),
+      onSelect: () => void setSavedStatus(slug, status, game).catch(e => lib.setError(errorText(e))),
+    })),
+    ...(saved.some(e => e.slug === slug) ? [{ label: 'Remove from saved games', onSelect: () => void setSavedStatus(slug, null).catch(e => lib.setError(errorText(e))) }] : []),
+    { separator: true },
+  ]
+  const contextItems = (): MenuEntry[] => {
+    if (!ctx) return []
+    if ('game' in ctx) return gameMenu(ctx.game).map(entry => 'onSelect' in entry && bigPicture ? { ...entry, onSelect: () => { setBigPicture(false); entry.onSelect() } } : entry)
+    if ('saved' in ctx) {
+      const g = ctx.saved
+      return [
+        { label: 'Install', icon: <DownloadIcon />, onSelect: () => openWeb(`/game/${g.slug}?download=1`) },
+        { label: 'Game details', onSelect: () => go({ kind: 'catalog', slug: g.slug }) },
+        { label: 'Store page', icon: <Globe />, onSelect: () => openWeb(`/game/${g.slug}`) },
+        { separator: true },
+        ...(!guest ? shelfMenu(g.slug, { title: g.title, cover: g.cover }) : []),
+      ]
+    }
+    const d = ctx.download
+    return [
+      { label: d.status === 'paused' ? 'Resume download' : 'Pause download', onSelect: () => void (d.status === 'paused' ? downloads.resume(d.id) : downloads.pause(d.id)).catch(e => lib.setError(errorText(e))) },
+      { label: 'View downloads', onSelect: () => go({ kind: 'downloads' }) },
+      ...(d.slug ? [{ label: 'Store page', onSelect: () => openWeb(`/game/${d.slug}`) }] : []),
+    ]
+  }
 
   /* ── Menus ── */
   const recent = useMemo(
@@ -636,6 +668,20 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
   // from a new pad's notification.
   useControllerFeature(!!account.controller && !guest)
   const padStore = usePadStore()
+  const announcedPads = useRef(new Set<number>())
+  useEffect(() => {
+    if (!padStore.on) { announcedPads.current.clear(); return }
+    if (!padStore.config) return
+    if (padStore.config.notify) for (const pad of padStore.pads) {
+      if (!announcedPads.current.has(pad.id)) push({
+        title: `${pad.name} connected`,
+        body: pad.mapped ? 'Ready to use. Click to test buttons or change your setup.' : 'Click to set up your buttons. It takes about a minute.',
+        gameId: null,
+        controllerGuid: pad.guid,
+      })
+    }
+    announcedPads.current = new Set(padStore.pads.map(p => p.id))
+  }, [padStore.on, padStore.pads, padStore.config, push])
   const firstPad = padStore.pads[0] ?? null
   usePadNavigation({
     enabled: padStore.on && !!padStore.config?.navigate,
@@ -706,7 +752,11 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
     }
   }, [dl, push])
 
-  const openToast = (t: Toast) => (t.gameId ? go({ kind: 'game', id: t.gameId }) : go({ kind: 'downloads' }))
+  const openToast = (t: Toast) => {
+    if (t.controllerGuid) { requestPad(t.controllerGuid); openSettings('controller') }
+    else if (t.gameId) go({ kind: 'game', id: t.gameId })
+    else go({ kind: 'downloads' })
+  }
   const openNotification = (url: string | null) => {
     if (!url) return openWeb('/notifications')
     if (url.startsWith('/')) return openWeb(url)
@@ -774,6 +824,8 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
           onSelect={(id) => go({ kind: 'game', id })}
           onPlay={play}
           onContext={(game, x, y) => setCtx({ game, x, y })}
+          onSavedContext={(saved, x, y) => setCtx({ saved, x, y })}
+          onDownloadContext={(download, x, y) => setCtx({ download, x, y })}
           onDownloads={() => go({ kind: 'downloads' })}
           saved={saved}
           selectedSlug={catalogSlug}
@@ -783,6 +835,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
           <CatalogGamePage
             key={catalogSlug}
             slug={catalogSlug}
+            onContext={(x, y) => setCtx({ saved: { slug: catalogSlug, title: saved.find(e => e.slug === catalogSlug)?.title ?? catalogSlug, cover: saved.find(e => e.slug === catalogSlug)?.cover ?? '' }, x, y })}
             fallback={(() => {
               const entry = saved.find((e) => e.slug === catalogSlug)
               return { title: entry?.title ?? catalogSlug, cover: entry?.cover || null }
@@ -798,6 +851,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
           <GamePage
             key={selected.id}
             game={selected}
+            onContext={(x, y) => setCtx({ game: selected, x, y })}
             running={lib.running.has(selected.id)}
             error={lib.error}
             onDismissError={() => lib.setError(null)}
@@ -895,7 +949,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
       />
       {view.kind !== 'web' ? <Toasts toasts={toasts} onOpen={openToast} onDismiss={dismiss} /> : null}
 
-      {ctx ? <ContextMenu x={ctx.x} y={ctx.y} items={gameMenu(ctx.game)} onClose={() => setCtx(null)} /> : null}
+      {ctx ? <ContextMenu x={ctx.x} y={ctx.y} items={contextItems()} onClose={() => setCtx(null)} /> : null}
 
       {overlay?.kind === 'add' ? (
         <AddGameDialog
@@ -997,8 +1051,11 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
           running={lib.running}
           onPlay={play}
           onStop={(g) => void lib.stop(g.id)}
+          onContext={(game, x, y) => setCtx({ game, x, y })}
           onExit={() => setBigPicture(false)}
           playerName={account.displayName || account.username || 'Guest'}
+          playerUsername={!guest && account.username ? account.username : undefined}
+          onProfile={() => { setBigPicture(false); openWeb(`/user/${encodeURIComponent(account.username)}`) }}
         />
       ) : null}
     </div>

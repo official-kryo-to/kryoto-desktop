@@ -25,6 +25,8 @@ pub struct Settings {
     pub notify_downloads: bool,
     /// kryo.to's palette: `monochrome`, `oled`, `amber`, `emerald`, `nord`, `sepia`, `blossom`.
     pub palette: String,
+    /// `account` follows kryo.to; also `system`, `light` or `dark`.
+    pub theme: String,
     /// kryo.to's corner setting: `sharp`, `soft`, `rounded`, `round`, `pill`.
     pub radius: String,
     /// `teletext` (the house face) or `mono`.
@@ -82,6 +84,7 @@ impl Default for Settings {
             minimize_on_play: false,
             notify_downloads: true,
             palette: "monochrome".into(),
+            theme: "account".into(),
             radius: "pill".into(),
             font: "teletext".into(),
             show_adult: false,

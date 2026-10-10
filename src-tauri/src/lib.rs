@@ -94,6 +94,9 @@ struct Account {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserReport {
+    /// The trusted site's actual scheme, including guest/theme-toggle changes.
+    #[serde(default)]
+    theme: Option<String>,
     url: String,
     #[serde(default)]
     title: Option<String>,
@@ -289,6 +292,34 @@ fn emit_state<R: Runtime>(app: &tauri::AppHandle<R>, state: BrowserState) {
     let _ = app.emit_to("main", "browser-state", &state);
 }
 
+/// Apply the shell's scheme to native window surfaces too.
+#[tauri::command]
+fn shell_theme(app: tauri::AppHandle, dark: bool) {
+    if let Some(window) = app.get_window("main") {
+        let _ = window.set_theme(Some(if dark { tauri::Theme::Dark } else { tauri::Theme::Light }));
+        let value = if dark { 10 } else { 249 };
+        let color = tauri::window::Color(value, value, value, 255);
+        let _ = window.set_background_color(Some(color));
+        for (label, view) in app.webviews() {
+            if label != STORE {
+                let _ = view.set_background_color(Some(color));
+            }
+        }
+    }
+}
+
+/// Native suppression covers the shell, popups and every Store navigation.
+#[cfg(windows)]
+fn disable_browser_menu(view: &tauri::Webview) {
+    let _ = view.with_webview(|w| unsafe {
+        if let Ok(core) = w.controller().CoreWebView2() {
+            if let Ok(settings) = core.Settings() {
+                let _ = settings.SetAreDefaultContextMenusEnabled(false);
+            }
+        }
+    });
+}
+
 /// Page-side reporting, run on every page the Store finishes loading. It only
 /// REPORTS; the shell checks the address against the web view's own.
 ///
@@ -408,6 +439,7 @@ const BROWSER_STATE_SCRIPT: &str = r#"
   const json = (path) => fetch(path, { credentials: 'include' }).then((r) => r.json());
   const who = (full) => {
     if (!KRYO) return;
+    send({ theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light' });
     if (full) json('/api/changelog/latest').then((j) => send({ news: j })).catch(() => {});
     json('/api/auth/me')
       .then((j) => {
@@ -417,7 +449,7 @@ const BROWSER_STATE_SCRIPT: &str = r#"
         const changed = id !== me || coins !== kryos;
         me = id;
         kryos = coins;
-        if (changed || full) send({ account: account = u ? {
+        const nextAccount = u ? {
           username: u.username,
           displayName: u.displayName || null,
           avatarUrl: u.avatarUrl || null,
@@ -430,6 +462,7 @@ const BROWSER_STATE_SCRIPT: &str = r#"
           controller: !!(u.features && u.features.controller),
           kryos: coins,
           appearance: {
+            theme: u.appearanceTheme || null,
             palette: u.appearancePalette || null,
             radius: u.appearanceRadius || null,
             typeface: u.appearanceTypeface || null,
@@ -437,7 +470,11 @@ const BROWSER_STATE_SCRIPT: &str = r#"
             nsfwHide: u.appearanceNsfwHide === true,
             motion: u.appearanceMotion || null
           }
-        } : null });
+        } : null;
+        if (changed || full || JSON.stringify(nextAccount) !== JSON.stringify(account)) {
+          account = nextAccount;
+          send({ account });
+        }
         if (!u) return;
         if (u.features && u.features.friends) {
           const face = (p) => ({ id: p.id, username: p.username, displayName: p.displayName || null, avatarUrl: p.avatarUrl || null, supporter: !!p.supporter });
@@ -471,6 +508,9 @@ const BROWSER_STATE_SCRIPT: &str = r#"
   let whoTimer = 0;
   const soon = () => { clearTimeout(whoTimer); whoTimer = setTimeout(() => who(false), 800); };
   window.__kryoDesktopRefresh = () => who(true);
+  if (KRYO) new MutationObserver(() => {
+    send({ theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light' });
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
   // Kryoto Desktop from the website (kryo.to lib/desktop-remote.ts, remote.rs):
   // take what was queued there, hand it to the downloader, and report the
   // downloads' progress back whenever it changes (and every half minute).
@@ -818,6 +858,9 @@ fn report_catalog_state(app: tauri::AppHandle, state: BrowserReport) -> Result<(
     let actual = view.url().map_err(|e| e.to_string())?;
     // Only kryo.to itself may say who is signed in, or what is in their inbox.
     if is_kryoto(&actual, &app) {
+        if let Some(theme) = state.theme.filter(|t| matches!(t.as_str(), "light" | "dark")) {
+            let _ = app.emit_to("main", "catalog-theme", theme);
+        }
         if let Some(account) = state.account {
             logging::set_account(account.as_ref().map(|a| a.username.clone()));
             player_name::remember_account(&app, account.as_ref().map(|a| a.username.as_str()));
@@ -1063,6 +1106,17 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(
+            PluginBuilder::<tauri::Wry, ()>::new("app-context-menu")
+                .js_init_script("document.addEventListener('contextmenu', e => e.preventDefault());")
+                .on_webview_ready(|view| {
+                    #[cfg(windows)]
+                    disable_browser_menu(&view);
+                    #[cfg(not(windows))]
+                    let _ = view;
+                })
+                .build(),
+        )
+        .plugin(
             PluginBuilder::<tauri::Wry, ()>::new("catalog-policy")
                 .on_navigation(|webview, url| {
                     if webview.label() != STORE {
@@ -1149,6 +1203,7 @@ pub fn run() {
             game_logs::game_logs_folder,
             library::library_prefix_folder,
             pad::pad_start,
+            shell_theme,
             pad::pad_stop,
             pad::pad_list,
             pad::pad_config_get,

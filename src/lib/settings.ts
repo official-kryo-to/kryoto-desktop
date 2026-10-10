@@ -4,6 +4,7 @@ import { clearCatalogEndpointCache } from '@/lib/endpoint'
 
 export type Palette = 'monochrome' | 'oled' | 'amber' | 'emerald' | 'nord' | 'sepia' | 'blossom'
 export type Radius = 'sharp' | 'soft' | 'rounded' | 'round' | 'pill'
+export type Theme = 'account' | 'system' | 'light' | 'dark'
 
 /** Mirrors `src-tauri/src/settings.rs`. */
 export type Settings = {
@@ -15,6 +16,7 @@ export type Settings = {
   minimizeOnPlay: boolean
   notifyDownloads: boolean
   palette: Palette
+  theme?: Theme
   radius: Radius
   font: 'teletext' | 'mono'
   showAdult: boolean
@@ -72,6 +74,7 @@ export const RADII: { value: Radius; label: string }[] = [
 ]
 
 export type Look = Pick<Settings, 'palette' | 'radius' | 'font' | 'showAdult'> & {
+  theme: 'system' | 'light' | 'dark'
   reducedMotion?: boolean
   /** kryo.to's "Hide" for adult games: left out of every list the client draws from kryo.to. */
   hideAdult?: boolean
@@ -79,6 +82,7 @@ export type Look = Pick<Settings, 'palette' | 'radius' | 'font' | 'showAdult'> &
 
 /** What a kryo.to account says about its look (`/api/auth/me`). */
 export type AccountAppearance = {
+  theme?: string | null
   palette: string | null
   radius: string | null
   typeface: string | null
@@ -93,14 +97,17 @@ const PALETTE_IDS = new Set(PALETTES.map((p) => p.id as string))
 const RADIUS_IDS = new Set(RADII.map((r) => r.value as string))
 
 /**
- * The look to draw in: the account's, once kryo.to has said, else the defaults. The site's light theme is not carried
- * over - the client is dark by design - but its palette, corners, typeface
- * and adult blur are.
+ * Follow the site's resolved theme, including its theme toggle.
+ * A local theme choice also works offline and for guests.
  */
-export function effectiveLook(s: Settings, account: { appearance?: AccountAppearance | null } | null | undefined): Look {
+export function effectiveLook(s: Settings, account: { appearance?: AccountAppearance | null } | null | undefined, catalogTheme?: 'light' | 'dark' | null): Look {
   const a = account?.appearance
-  if (!a) return { palette: s.palette, radius: s.radius, font: s.font, showAdult: s.showAdult }
+  const choice = s.theme ?? 'account'
+  const accountTheme = a?.theme === 'light' || a?.theme === 'system' ? a.theme : 'dark'
+  const theme = choice === 'account' ? catalogTheme ?? accountTheme : choice
+  if (!a || !s.followAccount) return { theme, palette: s.palette, radius: s.radius, font: s.font, showAdult: s.showAdult }
   return {
+    theme,
     palette: (a.palette && PALETTE_IDS.has(a.palette) ? a.palette : 'monochrome') as Palette,
     radius: (a.radius && RADIUS_IDS.has(a.radius) ? a.radius : 'pill') as Radius,
     font: a.typeface === 'mono' ? 'mono' : 'teletext',
@@ -111,8 +118,11 @@ export function effectiveLook(s: Settings, account: { appearance?: AccountAppear
 }
 
 /** Stamp the look on <html>, the way kryo.to does before first paint. */
-export function applyLook(s: Pick<Settings, 'palette' | 'radius' | 'font'> & { reducedMotion?: boolean }) {
+export function applyLook(s: Pick<Settings, 'palette' | 'radius' | 'font'> & { theme?: 'system' | 'light' | 'dark'; reducedMotion?: boolean }) {
   const html = document.documentElement
+  const dark = s.theme === 'system' ? matchMedia('(prefers-color-scheme: dark)').matches : s.theme !== 'light'
+  html.classList.toggle('dark', dark)
+  html.style.colorScheme = dark ? 'dark' : 'light'
   if (s.reducedMotion) html.dataset.motion = 'reduced'
   else delete html.dataset.motion
   html.dataset.palette = s.palette || 'monochrome'

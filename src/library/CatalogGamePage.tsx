@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { gameContext } from './context'
 import { ChevronDown, Globe, Layers } from 'lucide-react'
 import { AsciiBar, Button, Caption, Card, IconButton, Label, MenuList, Modal, useDismiss } from '@/ui'
 import { fetchCatalogGame, type CatalogGame } from '@/lib/library'
@@ -25,6 +26,7 @@ export function CatalogGamePage({
   onInstall,
   onStorePage,
   onDownloads,
+  onContext,
 }: {
   slug: string
   /** What the list already knows, drawn while kryo.to answers. */
@@ -37,6 +39,7 @@ export function CatalogGamePage({
   onInstall: GetOurs
   onStorePage: () => void
   onDownloads: () => void
+  onContext?: (x: number, y: number) => void
 }) {
   const [game, setGame] = useState<CatalogGame | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -67,7 +70,7 @@ export function CatalogGamePage({
   const going = download && (isActive(download) || download.status === 'paused') ? download : null
 
   return (
-    <section aria-label={title} className="min-h-0 grow overflow-auto">
+    <section aria-label={title} className="min-h-0 grow overflow-auto" {...gameContext(onContext)}>
       <GameBanner
         title={title}
         adult={adult}

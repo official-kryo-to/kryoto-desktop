@@ -4,7 +4,7 @@ import { Button, Caption, Check, Dropdown, Matrix, Section, Segmented } from '@/
 import { PadArtView, PadBadge, type Callout } from '@/controller/PadArtView'
 import { PadSetup } from '@/controller/PadSetup'
 import { openExternal } from '@/lib/window'
-import { savePadConfig, usePadInput, usePadStore } from '@/hooks/usePads'
+import { clearPadRequest, savePadConfig, usePadInput, usePadStore } from '@/hooks/usePads'
 import { isWindowsHost } from '@/lib/library'
 import {
   actsAs,
@@ -45,8 +45,12 @@ export function ControllerPane() {
   const known = useMemo(() => {
     // Plugged in first, then the ones seen before.
     const list: { guid: string; pad: PadInfo | null; name: string }[] = pads.map((p) => ({ guid: p.guid, pad: p, name: p.name }))
-    for (const [guid, prefs] of Object.entries(config?.pads ?? {}))
+    for (const [guid, prefs] of Object.entries(config?.pads ?? {})) {
+      // Previous Windows versions saved this inactive WGI alias. Keep its
+      // settings on disk, but do not offer a dead interface to configure.
+      if (guid.slice(8, 24) === '3810000034140000' && guid.slice(28, 30) === '77') continue
       if (!list.some((k) => k.guid === guid)) list.push({ guid, pad: null, name: prefs.name || 'Controller' })
+    }
     return list
   }, [pads, config])
 
@@ -58,9 +62,19 @@ export function ControllerPane() {
   useEffect(() => {
     if (!requested) return
     setChosen(requested.guid)
+    clearPadRequest()
     // A pad whose buttons Kryoto does not know goes straight to its setup.
     if (pads.some((p) => p.guid === requested.guid && !p.mapped)) setSetup(true)
   }, [requested, pads])
+
+  useEffect(() => {
+    // Follow a new connection instead of leaving the test drawing on a
+    // saved, disconnected profile after its instance/backend changes.
+    if (pads.length && !pads.some(p => p.guid === chosen)) {
+      setChosen(pads[0]!.guid)
+      setSetup(false)
+    }
+  }, [pads])
 
   const prefs: PadPrefs = (current && config?.pads[current.guid]) || { name: current?.name ?? '', family: null, remap: {}, mapping: null, base: null, sdl: null }
   const family = current ? familyOf(current.pad, prefs) : preview
@@ -92,7 +106,11 @@ export function ControllerPane() {
   const [driver, setDriver] = useState<boolean | null>(null)
   const checkDriver = () => void padApi.virtualDriver().then(setDriver).catch(() => setDriver(false))
   useEffect(() => {
-    if (windows) checkDriver()
+    if (!windows) return
+    checkDriver()
+    const timer = window.setInterval(checkDriver, 5000)
+    window.addEventListener('focus', checkDriver)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', checkDriver) }
   }, [windows])
   const forgetSetup = () =>
     pad && void padApi.saveSetup(pad.guid, pad.name, null).then((c) => savePadConfig(c)).catch(() => {})
@@ -100,6 +118,13 @@ export function ControllerPane() {
   return (
     <>
       <div className="grid gap-3">
+        {pad?.mapped ? <div className="kryo-radius flex flex-wrap items-center gap-3 border border-border bg-card p-4">
+          <div className="min-w-0 grow">
+            <p className="text-sm font-bold text-foreground">Ready to use</p>
+            <p className="mt-1 text-xs text-muted-foreground">Press buttons and move the sticks to test them below. If a button is wrong, run the guided setup.</p>
+          </div>
+          <Button size="sm" onClick={() => setSetup(true)}>Fix button layout</Button>
+        </div> : null}
         {known.length ? (
           <div role="tablist" aria-label="Controllers" className="flex flex-wrap gap-2">
             {known.map((k) => (
@@ -129,7 +154,7 @@ export function ControllerPane() {
         ) : (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <Gamepad2 className="size-4" aria-hidden />
-            Plug in a controller, or connect one over Bluetooth. Kryoto asks to set up each new one.
+            Plug in a controller, or connect one over Bluetooth. Recognized controllers are ready immediately; others get a guided setup.
           </p>
         )}
 
@@ -297,7 +322,7 @@ export function ControllerPane() {
                   <div className="kryo-radius flex flex-wrap items-center gap-3 border border-border p-3">
                     <Matrix state="unavailable" className="size-3.5 text-warning" />
                     <p className="min-w-0 grow text-xs text-muted-foreground">
-                      This needs ViGEmBus, a free driver for virtual controllers that DS4Windows and similar tools use too. Install it once, then press Check again.
+                      Install ViGEmBus once to play as a virtual Xbox controller. Kryoto checks automatically after installation; you can also press Check again.
                     </p>
                     <Button size="sm" onClick={() => void openExternal(VIRTUAL_DRIVER_URL)}>
                       Get the driver
@@ -324,7 +349,7 @@ export function ControllerPane() {
           {config.navigate ? (
             <Check checked={config.haptics} onChange={(v) => setFlag('haptics', v)} label="Feel it in the controller as the selection moves (a light rumble)" />
           ) : null}
-          <Check checked={config.notify} onChange={(v) => setFlag('notify', v)} label="Ask to set up a controller the first time it is connected" />
+          <Check checked={config.notify} onChange={(v) => setFlag('notify', v)} label="Show a notification when a controller connects" />
           {config.navigate ? <NavLegend family={family} /> : null}
         </Section>
       ) : null}

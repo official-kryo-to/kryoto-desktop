@@ -35,6 +35,10 @@ export function requestPad(guid: string) {
   set({ requested: { guid } })
 }
 
+export function clearPadRequest() {
+  set({ requested: null })
+}
+
 /** Save Settings > Controller; the native side returns what it kept. */
 export async function savePadConfig(next: PadConfig) {
   set({ config: next })
@@ -50,13 +54,19 @@ export function useControllerFeature(enabled: boolean) {
     if (!enabled) return
     let cancelled = false
     let stop: (() => void) | undefined
-    void padApi
-      .start()
-      .then((pads) => !cancelled && set({ pads, on: true }))
-      .then(() => padApi.config())
-      .then((config) => !cancelled && config && set({ config }))
-      .catch(() => {})
-    void on<PadInfo[]>('pad-list', (pads) => set({ pads })).then((fn) => (cancelled ? fn() : (stop = fn)))
+    // Subscribe before SDL starts; an already-connected pad can arrive at once.
+    void on<PadInfo[]>('pad-list', (pads) => {
+      if (cancelled) return
+      set({ pads })
+      void padApi.config().then(config => { if (!cancelled) set({ config }) }).catch(() => {})
+    }).then(async fn => {
+      if (cancelled) return fn()
+      stop = fn
+      set({ on: true })
+      await padApi.start()
+      const config = await padApi.config()
+      if (!cancelled) set({ config })
+    }).catch(() => {})
     return () => {
       cancelled = true
       stop?.()
@@ -74,6 +84,7 @@ export function usePadInput(id: number | null) {
   useEffect(() => {
     setPressed(new Set())
     setAxes(null)
+    setLast(null)
     if (id === null) return
     let cancelled = false
     const stops: (() => void)[] = []

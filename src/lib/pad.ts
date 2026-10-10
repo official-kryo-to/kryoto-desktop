@@ -79,7 +79,7 @@ export type PadButtonEvent = { id: number; control: PadControl; pressed: boolean
 /** A raw input during the setup: a button (1 down, 0 up), an axis (-1..1) or a hat (direction bits). */
 export type PadRawEvent = { id: number; kind: 'button' | 'axis' | 'hat'; index: number; value: number }
 /** Where every raw axis and hat rests when the setup starts listening. */
-export type PadRawState = { id: number; axes: number[]; hats: number[] }
+export type PadRawState = { id: number; axes: number[]; hats: number[]; buttons?: boolean[] }
 
 /** The free driver Windows needs for the virtual Xbox controller. */
 export const VIRTUAL_DRIVER_URL = 'https://github.com/nefarius/ViGEmBus/releases/latest'

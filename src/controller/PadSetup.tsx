@@ -108,6 +108,8 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
   const [note, setNote] = useState<string | null>(null)
   const [got, setGot] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [ready, setReady] = useState(false)
+  const [releasing, setReleasing] = useState(false)
   const [blink, setBlink] = useState(false)
   const [beat, setBeat] = useState(0)
   const step = STEPS[index]!
@@ -117,6 +119,9 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
   const rest = useRef<{ axes: number[]; hats: number[] }>({ axes: [], hats: [] })
   // After each answer everything must be let go before the next is heard.
   const waitRelease = useRef(true)
+  const advancing = useRef(false)
+  const nextStepTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(nextStepTimer.current), [])
   const state = useRef({ phase, index, bound })
   state.current = { phase, index, bound }
 
@@ -138,6 +143,7 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
   }
 
   const accept = useCallback((src: string) => {
+    if (advancing.current) return
     const { index: i, bound: b } = state.current
     const s = STEPS[i]!
     const other = Object.entries(b).find(([k, v]) => k !== s.key && clash(v, src))
@@ -149,9 +155,11 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
     setNote(null)
     setBound((cur) => ({ ...cur, [s.key]: src }))
     setGot(s.key)
+    advancing.current = true
     waitRelease.current = true
     void padApi.haptic(pad.id, 'tick').catch(() => {})
-    window.setTimeout(() => {
+    nextStepTimer.current = window.setTimeout(() => {
+      advancing.current = false
       setGot(null)
       if (i + 1 < STEPS.length) setIndex(i + 1)
       else setPhase('done')
@@ -183,12 +191,14 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
     let cancelled = false
     const stops: (() => void)[] = []
     const keep = (fn: () => void) => (cancelled ? fn() : stops.push(fn))
-    void on<PadRawState>('pad-raw-state', (s) => {
+    const subscriptions = [on<PadRawState>('pad-raw-state', (s) => {
       if (s.id !== pad.id) return
       rest.current = { axes: s.axes, hats: s.hats }
       live.current.axes = new Map(s.axes.map((v, i) => [i, v]))
-    }).then(keep)
-    void on<PadRawEvent>('pad-raw', (ev) => {
+      live.current.buttons = new Set((s.buttons ?? []).flatMap((held, i) => held ? [i] : []))
+      live.current.hats = new Map(s.hats.map((v, i) => [i, v]))
+      setReady(true)
+    }).then(keep), on<PadRawEvent>('pad-raw', (ev) => {
       if (ev.id !== pad.id) return
       const l = live.current
       if (ev.kind === 'button') {
@@ -197,14 +207,18 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
       } else if (ev.kind === 'axis') l.axes.set(ev.index, ev.value)
       else l.hats.set(ev.index, ev.value)
       if (state.current.phase !== 'step') return
+      if (advancing.current) return
       if (waitRelease.current) {
-        if (neutral()) waitRelease.current = false
+        if (neutral()) { waitRelease.current = false; setReleasing(false) }
         return
       }
       const src = read(ev)
       if (src) accept(src)
-    }).then(keep)
-    void padApi.capture(pad.id).catch(() => {})
+    }).then(keep)]
+    // The resting-state reply must not beat the event subscriptions.
+    void Promise.all(subscriptions).then(() => {
+      if (!cancelled) return padApi.capture(pad.id)
+    }).catch(e => setError(String(e)))
     return () => {
       cancelled = true
       stops.forEach((f) => f())
@@ -215,10 +229,13 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
   // A new step listens once everything is let go.
   useEffect(() => {
     waitRelease.current = !neutral()
+    setReleasing(waitRelease.current)
     setNote(null)
   }, [index, phase])
 
   const go = (to: number) => {
+    window.clearTimeout(nextStepTimer.current)
+    advancing.current = false
     setNote(null)
     setGot(null)
     if (to < 0) return setPhase('intro')
@@ -300,8 +317,8 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
         phase === 'intro' ? (
           <div className="flex w-full items-center justify-between gap-3">
             <span className="text-[11px] text-muted-foreground">About a minute. Nothing changes until you save.</span>
-            <Button variant="primary" onClick={begin}>
-              Start
+            <Button variant="primary" onClick={begin} disabled={!ready}>
+              {ready ? 'Start setup' : 'Connecting…'}
             </Button>
           </div>
         ) : phase === 'step' ? (
@@ -319,7 +336,7 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
               Start over
             </Button>
             <Button variant="primary" onClick={() => void save()} disabled={phase === 'saving' || !bound.a}>
-              {phase === 'saving' ? 'Saving' : 'Save'}
+              {phase === 'saving' ? 'Saving' : 'Save and test'}
             </Button>
           </div>
         )
@@ -345,10 +362,9 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
         <div className="grid min-h-20 justify-items-center gap-1.5 text-center" aria-live="polite">
           {phase === 'intro' ? (
             <>
-              <p className="text-lg font-bold text-foreground">Kryoto asks for each button once</p>
+              <p className="text-lg font-bold text-foreground">Follow the highlighted button</p>
               <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-                Press what the screen shows. Skip anything your controller does not have. Afterwards Kryoto, your games and the
-                virtual Xbox controller all use this setup.
+                Put the controller down so the sticks and triggers rest. Press Start setup, then press each highlighted button once and let go. Skip controls your controller does not have. Save and test when finished.
               </p>
             </>
           ) : phase === 'step' ? (
@@ -357,7 +373,7 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
                 {got === step.key ? <Matrix key={step.key} state="success" className="size-4" /> : null}
                 {got === step.key ? 'Got it' : prompt(step, family)}
               </p>
-              <p className={cn('text-xs', note ? 'text-warning' : 'text-muted-foreground')}>{note ?? WHERE[step.key] ?? ' '}</p>
+              <p className={cn('text-xs', note ? 'text-warning' : 'text-muted-foreground')}>{note ?? (releasing ? 'Let go of the buttons and centre both sticks to continue.' : WHERE[step.key] ?? 'Press once, then let go.')}</p>
               <p className="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                 <Matrix state="scan" className="size-3 text-primary" />
                 Listening to your controller
@@ -368,7 +384,7 @@ export function PadSetup({ pad, family, onClose }: { pad: PadInfo; family: PadFa
               <p className="text-lg font-bold text-foreground">{error ? 'Not saved' : 'All set'}</p>
               <p className="max-w-md text-xs text-muted-foreground">
                 {error ??
-                  `${count} of ${STEPS.length} controls set up${skipped.size ? `, ${skipped.size} skipped` : ''}. Save, then press a few buttons in Settings > Controller to check them.`}
+                  `${count} controls ready${skipped.size ? `, ${skipped.size} skipped` : ''}. Press Save and test, then try the buttons on the controller drawing.`}
               </p>
             </>
           )}

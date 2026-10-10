@@ -11,6 +11,7 @@ import type { PadControl, PadFamily } from '@/lib/pad-art'
 import type { LibraryGame } from '@/lib/library'
 import { isTauri } from '@/lib/window'
 import { cn } from '@/lib/utils'
+import { gameContext } from '@/library/context'
 
 /**
  * Big Picture: Kryoto for the couch, made for a controller.
@@ -31,6 +32,9 @@ export function BigPicture({
   onStop,
   onExit,
   playerName,
+  playerUsername,
+  onProfile,
+  onContext,
 }: {
   games: LibraryGame[]
   running: Set<string>
@@ -38,6 +42,9 @@ export function BigPicture({
   onStop: (g: LibraryGame) => void
   onExit: () => void
   playerName: string
+  playerUsername?: string
+  onProfile?: () => void
+  onContext?: (g: LibraryGame, x: number, y: number) => void
 }) {
   const { pads, config } = usePadStore()
   const pad = pads[0] ?? null
@@ -79,6 +86,7 @@ export function BigPicture({
   // B (lib/pad-nav.ts asks first), Esc, the bumpers and Home.
   useEffect(() => {
     const back = (e: Event) => {
+      if (document.activeElement?.closest('[role="menu"], [role="listbox"]')) return
       e.preventDefault()
       if (open) setOpen(null)
       else onExit()
@@ -94,6 +102,7 @@ export function BigPicture({
     }
     const key = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (e.target instanceof Element && e.target.closest('[role="menu"], [role="listbox"]')) return
       e.preventDefault()
       if (open) setOpen(null)
       else onExit()
@@ -153,12 +162,12 @@ export function BigPicture({
           {pad ? pad.name : 'No controller'}
         </span>
         <span className="text-lg font-bold tabular-nums">{clock}</span>
-        <span className="text-sm text-muted-foreground">{playerName}</span>
+        {playerUsername ? <a href={`https://kryo.to/user/${encodeURIComponent(playerUsername)}`} onClick={e => { if (onProfile) { e.preventDefault(); onProfile() } }} className="kryo-pill text-sm text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">{playerName}</a> : <span className="text-sm text-muted-foreground">{playerName}</span>}
       </header>
 
       <main className="min-h-0 overflow-auto px-12 pb-8 pt-3">
         {open ? (
-          <Detail game={open} running={running.has(open.id)} onPlay={() => onPlay(open)} onStop={() => onStop(open)} family={family} />
+          <Detail game={open} running={running.has(open.id)} onPlay={() => onPlay(open)} onStop={() => onStop(open)} family={family} onContext={onContext ? (x, y) => onContext(open, x, y) : undefined} />
         ) : (
           <div className="grid gap-10">
             {hero && tab === 'library' ? (
@@ -166,6 +175,7 @@ export function BigPicture({
                 type="button"
                 data-bp-first
                 onClick={() => setOpen(hero)}
+                {...gameContext(onContext ? (x, y) => onContext(hero, x, y) : undefined)}
                 // A wide tile grows less, so it stays inside the page.
                 style={{ ['--bp-grow' as string]: 1.012 }}
                 className="kryo-bp-tile kryo-radius relative h-[38vh] min-h-56 overflow-hidden border border-border text-left"
@@ -186,6 +196,7 @@ export function BigPicture({
                     type="button"
                     data-bp-first={!(hero && tab === 'library') && i === 0 ? true : undefined}
                     onClick={() => setOpen(g)}
+                    {...gameContext(onContext ? (x, y) => onContext(g, x, y) : undefined)}
                     className="kryo-bp-tile kryo-radius group relative aspect-[2/3] overflow-hidden border border-border bg-card text-left"
                   >
                     <Art adult={g.nsfw} src={g.cover} fallback={[g.header, g.hero]} title={g.title} className="absolute inset-0 size-full object-cover" />
@@ -231,11 +242,11 @@ export function BigPicture({
   )
 }
 
-function Detail({ game, running, onPlay, onStop, family }: { game: LibraryGame; running: boolean; onPlay: () => void; onStop: () => void; family: PadFamily }) {
+function Detail({ game, running, onPlay, onStop, family, onContext }: { game: LibraryGame; running: boolean; onPlay: () => void; onStop: () => void; family: PadFamily; onContext?: (x: number, y: number) => void }) {
   const hours = Math.floor(game.playtimeSeconds / 3600)
   const minutes = Math.floor((game.playtimeSeconds % 3600) / 60)
   return (
-    <div className="kryo-in relative grid min-h-full content-end overflow-hidden">
+    <div {...gameContext(onContext)} className="kryo-in relative grid min-h-full content-end overflow-hidden">
       <Art adult={game.nsfw} src={game.hero} fallback={[game.header, game.cover]} title={game.title} className="kryo-radius absolute inset-0 size-full object-cover opacity-70" />
       <span className="hero-fade absolute inset-0" />
       <div className="relative grid gap-5 p-10">

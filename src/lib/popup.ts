@@ -18,7 +18,7 @@ export type PopupItem =
   | { separator: true }
   | { heading: string }
 
-export type PopupLook = { palette: string; radius: string; font: string | undefined }
+export type PopupLook = { palette: string; radius: string; font: string | undefined; theme: 'light' | 'dark' }
 
 export type PopupPayload =
   | { menu: string; kind: 'menu'; items: PopupItem[]; minWidth?: number; look: PopupLook }
@@ -75,7 +75,7 @@ function wire() {
 
 function look(): PopupLook {
   const d = document.documentElement.dataset
-  return { palette: d.palette ?? 'monochrome', radius: d.radius ?? 'pill', font: d.font }
+  return { palette: d.palette ?? 'monochrome', radius: d.radius ?? 'pill', font: d.font, theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light' }
 }
 
 function iconMarkup(icon: ReactNode): string | undefined {

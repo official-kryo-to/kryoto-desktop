@@ -441,7 +441,7 @@ const HANDLERS: Record<string, (a: Record<string, unknown>) => unknown> = {
   settings_get: () => ({ ...settings }),
   // Every sample game can use Kryoto Online, so the add-ons card shows it.
   online_check: () => null,
-  settings_save: (a) => Object.assign(settings, a.settings),
+  settings_save: (a) => ({ ...Object.assign(settings, a.settings) }),
   downloads_list: () => clone(downloadList),
   storage_overview: () => ({
     folders: [
@@ -554,7 +554,7 @@ let previewPadConfig = {
   } as Record<string, Record<string, unknown>>,
 }
 Object.assign(HANDLERS, {
-  pad_start: () => previewPads,
+  pad_start: () => { previewBus.emit('pad-list', clone(previewPads)); return previewPads },
   pad_stop: () => null,
   pad_list: () => previewPads,
   pad_config_get: () => previewPadConfig,

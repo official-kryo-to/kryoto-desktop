@@ -3,7 +3,7 @@
 @import '@fontsource/geist-mono/700.css';
 
 /* `dark:` follows the class on <html>, as on kryo.to (site components
-   colour themselves with it). The client is always dark. */
+   colour themselves with it). The shell follows the selected colour scheme. */
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@
 
 /* Dark, the site's `.dark` - the base every palette overrides. The status
    colours are the site's and Forge's, so a warning looks the same in all three. */
-:root {
+:root.dark {
   color-scheme: dark;
   --background: oklch(0.15 0 0);
   --foreground: oklch(0.96 0 0);
@@ -323,7 +323,7 @@ html[data-motion='reduced'] .kryo-matrix > i { animation: none !important; }
    The site's six palettes (the dark variants), verbatim. OLED is the default,
    as on kryo.to; the others are a choice in Settings > Interface.
 --------------------------------------------------------------------------- */
-[data-palette='oled'] {
+[data-palette='oled'].dark {
   --background: oklch(0.02 0 0);
   --foreground: oklch(0.98 0 0);
   --card: oklch(0.06 0 0);
@@ -345,7 +345,7 @@ html[data-motion='reduced'] .kryo-matrix > i { animation: none !important; }
   --sidebar-border: oklch(0.18 0 0);
 }
 
-[data-palette='amber'] {
+[data-palette='amber'].dark {
   --background: oklch(0.14 0.03 65);
   --foreground: oklch(0.92 0.12 75);
   --card: oklch(0.18 0.04 65);
@@ -367,7 +367,7 @@ html[data-motion='reduced'] .kryo-matrix > i { animation: none !important; }
   --sidebar-border: oklch(0.28 0.06 65);
 }
 
-[data-palette='emerald'] {
+[data-palette='emerald'].dark {
   --background: oklch(0.13 0.03 150);
   --foreground: oklch(0.92 0.1 150);
   --card: oklch(0.17 0.04 150);
@@ -389,7 +389,7 @@ html[data-motion='reduced'] .kryo-matrix > i { animation: none !important; }
   --sidebar-border: oklch(0.26 0.05 150);
 }
 
-[data-palette='nord'] {
+[data-palette='nord'].dark {
   --background: oklch(0.16 0.03 240);
   --foreground: oklch(0.93 0.03 240);
   --card: oklch(0.2 0.04 240);
@@ -411,7 +411,7 @@ html[data-motion='reduced'] .kryo-matrix > i { animation: none !important; }
   --sidebar-border: oklch(0.28 0.05 240);
 }
 
-[data-palette='sepia'] {
+[data-palette='sepia'].dark {
   --background: oklch(0.16 0.02 50);
   --foreground: oklch(0.92 0.05 50);
   --card: oklch(0.2 0.03 50);
@@ -433,7 +433,7 @@ html[data-motion='reduced'] .kryo-matrix > i { animation: none !important; }
   --sidebar-border: oklch(0.28 0.04 50);
 }
 
-[data-palette='blossom'] {
+[data-palette='blossom'].dark {
   --background: oklch(0.14 0.03 350);
   --foreground: oklch(0.93 0.08 350);
   --card: oklch(0.18 0.04 350);
@@ -536,3 +536,151 @@ html.kryo-pad .kryo-bp-tile:focus {
   position: relative;
   z-index: 1;
 }
+
+/* Light scheme and palettes, shared with kryo.to. OLED uses monochrome in light. */
+:root {
+  color-scheme: light;
+  --background: oklch(0.98 0 0);
+  --foreground: oklch(0.12 0 0);
+  --card: oklch(0.96 0 0);
+  --card-foreground: oklch(0.12 0 0);
+  --popover: oklch(0.97 0 0);
+  --popover-foreground: oklch(0.12 0 0);
+  --primary: oklch(0.1 0 0);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.92 0 0);
+  --secondary-foreground: oklch(0.12 0 0);
+  --muted: oklch(0.93 0 0);
+  --muted-foreground: oklch(0.48 0 0);
+  --accent: oklch(0.92 0 0);
+  --accent-foreground: oklch(0.12 0 0);
+  --destructive: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  /* Shared status colours, adjusted for a light background. */
+  --warning: oklch(0.62 0.15 75);
+  --success: oklch(0.56 0.14 150);
+  --border: oklch(0.84 0 0);
+  --input: oklch(0.86 0 0);
+  --ring: oklch(0.4 0 0);
+  --chart-1: oklch(0.12 0 0);
+  --chart-2: oklch(0.3 0 0);
+  --chart-3: oklch(0.5 0 0);
+  --chart-4: oklch(0.7 0 0);
+  --chart-5: oklch(0.86 0 0);
+  /* shadcn primitives read this one; keep it on the reader's choice. */
+  --radius: var(--kryo-radius);
+  --sidebar: oklch(0.96 0 0);
+  --sidebar-foreground: oklch(0.12 0 0);
+  --sidebar-primary: oklch(0.1 0 0);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.92 0 0);
+  --sidebar-accent-foreground: oklch(0.12 0 0);
+  --sidebar-border: oklch(0.84 0 0);
+  --sidebar-ring: oklch(0.4 0 0);
+}
+[data-palette='amber']:not(.dark) {
+  --background: oklch(0.97 0.02 75);
+  --foreground: oklch(0.22 0.08 65);
+  --card: oklch(0.94 0.03 75);
+  --card-foreground: oklch(0.22 0.08 65);
+  --popover: oklch(0.95 0.03 75);
+  --popover-foreground: oklch(0.22 0.08 65);
+  --primary: oklch(0.25 0.09 65);
+  --primary-foreground: oklch(0.97 0.02 75);
+  --secondary: oklch(0.9 0.04 75);
+  --secondary-foreground: oklch(0.22 0.08 65);
+  --muted: oklch(0.88 0.04 75);
+  --muted-foreground: oklch(0.45 0.06 65);
+  --accent: oklch(0.9 0.04 75);
+  --accent-foreground: oklch(0.22 0.08 65);
+  --border: oklch(0.82 0.05 75);
+  --input: oklch(0.85 0.04 75);
+  --sidebar: oklch(0.94 0.03 75);
+  --sidebar-foreground: oklch(0.22 0.08 65);
+  --sidebar-border: oklch(0.82 0.05 75);
+}
+[data-palette='emerald']:not(.dark) {
+  --background: oklch(0.97 0.02 150);
+  --foreground: oklch(0.2 0.06 150);
+  --card: oklch(0.94 0.03 150);
+  --card-foreground: oklch(0.2 0.06 150);
+  --popover: oklch(0.95 0.03 150);
+  --popover-foreground: oklch(0.2 0.06 150);
+  --primary: oklch(0.22 0.08 150);
+  --primary-foreground: oklch(0.97 0.02 150);
+  --secondary: oklch(0.9 0.04 150);
+  --secondary-foreground: oklch(0.2 0.06 150);
+  --muted: oklch(0.88 0.04 150);
+  --muted-foreground: oklch(0.42 0.05 150);
+  --accent: oklch(0.9 0.04 150);
+  --accent-foreground: oklch(0.2 0.06 150);
+  --border: oklch(0.82 0.04 150);
+  --input: oklch(0.85 0.04 150);
+  --sidebar: oklch(0.94 0.03 150);
+  --sidebar-foreground: oklch(0.2 0.06 150);
+  --sidebar-border: oklch(0.82 0.04 150);
+}
+[data-palette='nord']:not(.dark) {
+  --background: oklch(0.97 0.01 240);
+  --foreground: oklch(0.18 0.04 240);
+  --card: oklch(0.94 0.02 240);
+  --card-foreground: oklch(0.18 0.04 240);
+  --popover: oklch(0.95 0.02 240);
+  --popover-foreground: oklch(0.18 0.04 240);
+  --primary: oklch(0.2 0.05 240);
+  --primary-foreground: oklch(0.97 0.01 240);
+  --secondary: oklch(0.9 0.03 240);
+  --secondary-foreground: oklch(0.18 0.04 240);
+  --muted: oklch(0.88 0.03 240);
+  --muted-foreground: oklch(0.44 0.04 240);
+  --accent: oklch(0.9 0.03 240);
+  --accent-foreground: oklch(0.18 0.04 240);
+  --border: oklch(0.82 0.03 240);
+  --input: oklch(0.85 0.03 240);
+  --sidebar: oklch(0.94 0.02 240);
+  --sidebar-foreground: oklch(0.18 0.04 240);
+  --sidebar-border: oklch(0.82 0.03 240);
+}
+[data-palette='sepia']:not(.dark) {
+  --background: oklch(0.95 0.03 60);
+  --foreground: oklch(0.22 0.05 50);
+  --card: oklch(0.91 0.04 60);
+  --card-foreground: oklch(0.22 0.05 50);
+  --popover: oklch(0.93 0.04 60);
+  --popover-foreground: oklch(0.22 0.05 50);
+  --primary: oklch(0.25 0.06 50);
+  --primary-foreground: oklch(0.95 0.03 60);
+  --secondary: oklch(0.87 0.05 60);
+  --secondary-foreground: oklch(0.22 0.05 50);
+  --muted: oklch(0.85 0.05 60);
+  --muted-foreground: oklch(0.45 0.04 50);
+  --accent: oklch(0.87 0.05 60);
+  --accent-foreground: oklch(0.22 0.05 50);
+  --border: oklch(0.8 0.05 60);
+  --input: oklch(0.82 0.05 60);
+  --sidebar: oklch(0.91 0.04 60);
+  --sidebar-foreground: oklch(0.22 0.05 50);
+  --sidebar-border: oklch(0.8 0.05 60);
+}
+[data-palette='blossom']:not(.dark) {
+  --background: oklch(0.97 0.02 350);
+  --foreground: oklch(0.22 0.07 350);
+  --card: oklch(0.94 0.03 350);
+  --card-foreground: oklch(0.22 0.07 350);
+  --popover: oklch(0.95 0.03 350);
+  --popover-foreground: oklch(0.22 0.07 350);
+  --primary: oklch(0.26 0.09 350);
+  --primary-foreground: oklch(0.97 0.02 350);
+  --secondary: oklch(0.91 0.035 350);
+  --secondary-foreground: oklch(0.22 0.07 350);
+  --muted: oklch(0.89 0.035 350);
+  --muted-foreground: oklch(0.46 0.06 350);
+  --accent: oklch(0.91 0.035 350);
+  --accent-foreground: oklch(0.22 0.07 350);
+  --border: oklch(0.83 0.045 350);
+  --input: oklch(0.86 0.04 350);
+  --sidebar: oklch(0.94 0.03 350);
+  --sidebar-foreground: oklch(0.22 0.07 350);
+  --sidebar-border: oklch(0.83 0.045 350);
+}
+:root:not(.dark) { --info: oklch(0.55 0.14 240); }

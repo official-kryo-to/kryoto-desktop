@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { isTauri, on } from '@/lib/bridge'
+import { call, isTauri, on } from '@/lib/bridge'
 import { isOnline } from '@/lib/online'
 import type { AccountAppearance } from '@/lib/settings'
 
@@ -33,6 +33,22 @@ export type Account = {
 
 /** Stands in for an account while using the client as a guest. */
 export const GUEST: Account = { username: '', displayName: 'Guest', avatarUrl: null, appearance: null, guest: true }
+
+/** The site's actual theme, also available when signed out. */
+export function useCatalogTheme() {
+  const [theme, setTheme] = useState<'light' | 'dark' | null>(null)
+  useEffect(() => {
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void on<'light' | 'dark'>('catalog-theme', value => { if (!cancelled) setTheme(value) }).then(fn => {
+      if (cancelled) return fn()
+      stop = fn
+      if (isTauri()) void call('store_refresh_account').catch(() => {})
+    }).catch(() => {})
+    return () => { cancelled = true; stop?.() }
+  }, [])
+  return theme
+}
 
 /**
  * Who is signed in to kryo.to - read from the Store web view, which holds the

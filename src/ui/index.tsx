@@ -389,7 +389,7 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
     setPos({ x: Math.min(x, window.innerWidth - r.width - 8), y: Math.min(y, window.innerHeight - r.height - 8) })
   }, [x, y])
   return (
-    <div ref={ref} role="menu" className={cn(MENU_PANEL, 'fixed')} style={{ left: pos.x, top: pos.y }}>
+    <div ref={ref} role="menu" className={cn(MENU_PANEL, 'fixed z-[700] max-h-[calc(100vh-16px)] overflow-y-auto')} style={{ left: Math.max(8, pos.x), top: Math.max(8, pos.y) }}>
       <MenuList items={items} onDone={onClose} />
     </div>
   )

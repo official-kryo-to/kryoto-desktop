@@ -290,6 +290,9 @@ function DesktopPane({ section }: { section: SettingsSection }) {
         ) : null}
         {section === 'general' ? (
           <>
+            <Section title="Desktop theme" hint="Applies to the library, downloads, settings and menus. Follow kryo.to to match the website's theme toggle.">
+              <Segmented label="Desktop theme" value={s.theme ?? 'account'} options={[{ value: 'account', label: 'Follow kryo.to' }, { value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} onChange={(v) => set('theme', v)} />
+            </Section>
             <Section title="Open on">
               <Segmented label="Open on" value={s.startPage} options={[{ value: 'library', label: 'Library' }, { value: 'store', label: 'Store' }]} onChange={(v) => set('startPage', v)} />
             </Section>

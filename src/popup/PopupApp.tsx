@@ -23,6 +23,8 @@ export function PopupApp() {
     const take = (p: PopupPayload | null) => {
       if (!p) return
       const html = document.documentElement
+      html.classList.toggle('dark', p.look.theme !== 'light')
+      html.style.colorScheme = p.look.theme === 'light' ? 'light' : 'dark'
       html.dataset.palette = p.look.palette
       html.dataset.radius = p.look.radius
       if (p.look.font) html.dataset.font = p.look.font

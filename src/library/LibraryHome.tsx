@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { gameContext } from './context'
 import { ChevronDown, Play } from 'lucide-react'
 import { Button, Label, MenuButton } from '@/ui'
 import { capsulesFor, type LibraryGame } from '@/lib/library'
@@ -52,17 +53,14 @@ export function LibraryHome({
     return list
   }, [games, sort])
   const last = recent[0]
-  const ctx = (g: LibraryGame) => (e: React.MouseEvent) => {
-    e.preventDefault()
-    onContext(g, e.clientX, e.clientY)
-  }
+  const ctx = (g: LibraryGame) => gameContext((x, y) => onContext(g, x, y))
 
   return (
     <div className="grid min-h-0 grow content-start gap-8 overflow-auto p-6">
       {top}
       {last ? (
         <section
-          onContextMenu={ctx(last)}
+          {...ctx(last)}
           className="kryo-radius kryo-in relative h-64 overflow-hidden border border-border bg-card"
         >
           <Art adult={last.nsfw} src={last.hero} fallback={[last.header, last.cover]} title="" className="absolute inset-0 size-full object-cover" />
@@ -97,7 +95,7 @@ export function LibraryHome({
                 type="button"
                 onClick={() => onOpen(g.id)}
                 onDoubleClick={() => onPlay(g)}
-                onContextMenu={ctx(g)}
+                {...ctx(g)}
                 className="kryo-radius group grid overflow-hidden border border-border bg-card text-left transition-[transform,border-color] duration-200 hover:-translate-y-0.5 hover:border-foreground/50"
               >
                 <Art adult={g.nsfw} src={capsulesFor(g)[0]} fallback={capsulesFor(g).slice(1)} title={g.title} className="aspect-[460/215] w-full object-cover" />
@@ -133,7 +131,7 @@ export function LibraryHome({
           {sorted.map((g) => (
             <div
               key={g.id}
-              onContextMenu={ctx(g)}
+              {...ctx(g)}
               className="kryo-radius group relative aspect-[2/3] overflow-hidden border border-border bg-card transition-[transform,border-color] duration-200 hover:-translate-y-1 hover:border-foreground/60"
             >
               <button type="button" onClick={() => onOpen(g.id)} className="kryo-square absolute inset-0" aria-label={`Open ${g.title}`}>

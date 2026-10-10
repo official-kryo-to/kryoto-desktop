@@ -6,15 +6,15 @@ import type { Notice } from '@/lib/downloads'
 import { notify } from '@/lib/notify'
 import { chime } from '@/lib/sound'
 
-export type Toast = Notice & { key: number }
+export type Toast = Notice & { key: number; controllerGuid?: string }
 
 /** Notices from Rust (`notify`) and from the shell, each for seven seconds. */
 export function useToasts() {
   const [toasts, setToasts] = useState<Toast[]>([])
-  const push = useCallback((n: Notice) => {
+  const push = useCallback((n: Notice & { controllerGuid?: string }) => {
     const key = Date.now() + Math.random()
     setToasts((t) => [...t.slice(-2), { ...n, key }])
-    setTimeout(() => setToasts((t) => t.filter((x) => x.key !== key)), 7000)
+    setTimeout(() => setToasts((t) => t.filter((x) => x.key !== key)), n.controllerGuid ? 15000 : 7000)
   }, [])
   const dismiss = useCallback((key: number) => setToasts((t) => t.filter((x) => x.key !== key)), [])
   useEffect(() => {
