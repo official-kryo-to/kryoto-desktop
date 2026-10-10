@@ -1,6 +1,6 @@
 [package]
 name = "kryoto-desktop"
-version = "0.2.12"
+version = "0.2.13"
 description = "Kryoto's native desktop launcher shell."
 authors = ["Kryoto"]
 license = "MIT"
@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 kryoto-repair = { path = "../crates/kryoto-repair" }
+walkdir = "2"
 tauri = { version = "2", features = ["unstable", "tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

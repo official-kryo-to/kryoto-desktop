@@ -1,3 +1,4 @@
+mod achievements;
 mod addons;
 mod art;
 mod chat;
@@ -1289,6 +1290,7 @@ pub fn run() {
             library::library_save,
             library::library_remove,
             library::game_launch,
+            achievements::game_achievements,
             library::game_launch_preview,
             library::game_running,
             library::game_stop,

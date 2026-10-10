@@ -1,4 +1,5 @@
 extern crate self as kryoto_core;
+pub mod achievements;
 pub mod child_guard;
 pub mod clipboard;
 pub mod crack;

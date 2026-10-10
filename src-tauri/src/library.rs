@@ -549,7 +549,7 @@ pub async fn library_remove(app: AppHandle, id: String, delete_files: bool) -> R
 }
 
 /// The plan, and the compatibility tool it uses (for the game's log).
-fn plan_for<R: Runtime>(app: &AppHandle<R>, game: &LibraryGame, entry: Option<usize>) -> Result<(LaunchPlan, Option<PathBuf>), String> {
+pub(crate) fn plan_for<R: Runtime>(app: &AppHandle<R>, game: &LibraryGame, entry: Option<usize>) -> Result<(LaunchPlan, Option<PathBuf>), String> {
     let entry = match entry {
         Some(i) => Some(game.entries.get(i).ok_or("That launch entry no longer exists.")?),
         None => None,
@@ -686,6 +686,8 @@ pub fn game_launch(
 
     // The name the player picked, into the emulator's files, before it reads them.
     crate::player_name::apply_for_launch(&app, &game);
+    // The achievement list gbe_fork needs, into a build made without one.
+    crate::achievements::before_launch(&game);
 
     let mut cmd = launch::command(&plan);
     #[cfg(unix)]
@@ -741,6 +743,7 @@ pub fn game_launch(
         Ok(())
     });
     let _ = app.emit("game-state", GameEvent { id: id.clone(), running: true, seconds: None, code: None });
+    crate::achievements::watch(app.clone(), &game, crate::achievements::roots_for(&plan.env));
     if crate::settings::load(&app).minimize_on_play {
         if let Some(w) = app.get_window("main") {
             let _ = w.minimize();

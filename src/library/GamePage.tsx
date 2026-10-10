@@ -9,6 +9,7 @@ import { formatLastPlayed, formatPlaytime } from '@/lib/format'
 import { errorText } from '@/lib/bridge'
 import { cn } from '@/lib/utils'
 import { AddonsCard } from '@/library/AddonsCard'
+import { AchievementsCard } from '@/library/AchievementsCard'
 import { STATUSES, STATUS_LABEL, type SavedStatus } from '@/hooks/useSaved'
 
 /**
@@ -277,6 +278,7 @@ export function GamePage({
             </Card>
           ) : null}
           <AddonsCard game={game} onGet={onGetUpdate} onChanged={(g) => onGameChanged?.(g)} />
+          <AchievementsCard game={game} />
         </div>
         <Card className="grid gap-3">
           <Label>Info</Label>

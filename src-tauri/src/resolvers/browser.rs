@@ -58,7 +58,9 @@ struct Probe {
     r: String,
     #[serde(default)]
     u: String,
-    /// A captcha or Turnstile widget is on the page.
+    /// A captcha or Turnstile widget is on the page and not passed yet. A
+    /// passed one fills in its response field; DropDrive leaves the widget on
+    /// the page afterwards, and counting it as waiting held its Download back.
     #[serde(default)]
     t: bool,
     /// The page says the file is gone.
@@ -68,7 +70,7 @@ struct Probe {
 
 fn probe_js() -> String {
     format!(
-        r#"(function(){{try{{var b=document.body?document.body.innerText.slice(0,6000):'';var d={{r:document.readyState,u:navigator.userAgent,t:!!document.querySelector('iframe[src*="challenges.cloudflare.com"],iframe[src*="turnstile"],iframe[src*="hcaptcha"],iframe[src*="recaptcha"],.cf-turnstile,.h-captcha,.g-recaptcha,#challenge-form'),n:/file not found|has been removed|no longer available|link (has )?expired|invalid file|was deleted|file does not exist/i.test(b)}};document.title="{PROBE_MARK}"+btoa(unescape(encodeURIComponent(JSON.stringify(d))));}}catch(e){{}}}})()"#
+        r#"(function(){{try{{var b=document.body?document.body.innerText.slice(0,6000):'';var d={{r:document.readyState,u:navigator.userAgent,t:!!document.querySelector('iframe[src*="challenges.cloudflare.com"],iframe[src*="turnstile"],iframe[src*="hcaptcha"],iframe[src*="recaptcha"],.cf-turnstile,.h-captcha,.g-recaptcha,#challenge-form')&&![].some.call(document.querySelectorAll('[name="cf-turnstile-response"],[name="h-captcha-response"],[name="g-recaptcha-response"]'),function(e){{return !!e.value}}),n:/file not found|has been removed|no longer available|link (has )?expired|invalid file|was deleted|file does not exist/i.test(b)}};document.title="{PROBE_MARK}"+btoa(unescape(encodeURIComponent(JSON.stringify(d))));}}catch(e){{}}}})()"#
     )
 }
 
@@ -143,6 +145,82 @@ fn site_of(url: &Url) -> String {
     labels[labels.len().saturating_sub(2)..].join(".")
 }
 
+/// Sites a mirror's page may load scripts and pictures from besides its own:
+/// the checks hosts put in front of their files, and the public code CDNs pages
+/// load libraries from. Everything else is somebody else's ads.
+const THIRD_PARTY_OK: &[&str] = &[
+    "challenges.cloudflare.com",
+    "hcaptcha.com",
+    "recaptcha.net",
+    "google.com",
+    "gstatic.com",
+    "cdnjs.cloudflare.com",
+    "cdn.jsdelivr.net",
+    "unpkg.com",
+    "code.jquery.com",
+    "ajax.googleapis.com",
+    "fonts.googleapis.com",
+];
+
+/// AD BLOCKING, the native kind.
+///
+/// A mirror's page is there to hand over one file, and what the file host
+/// wraps it in - banners, pop-under scripts, video ads, "click anywhere"
+/// layers - only slows that down or hijacks the press. So the page gets its
+/// own site and the few outside sites in `THIRD_PARTY_OK`, and every other
+/// script, picture and video it asks for is refused before it is fetched.
+///
+/// Native, not a script in the page: anything injected lands in every frame,
+/// Cloudflare's Turnstile frame included, and breaks the check (Desktop has
+/// been there once with a page-script plugin). Documents, fetches and XHRs
+/// are never refused, so the file itself, the host's API and any frame always
+/// load. VikingFile's page loads nothing from outside but Turnstile, so this
+/// changes nothing it needs.
+fn blocked(page_site: &str, request: &str) -> bool {
+    let Ok(u) = request.parse::<Url>() else { return false };
+    if !matches!(u.scheme(), "http" | "https") {
+        return false;
+    }
+    let host = u.host_str().unwrap_or("").to_ascii_lowercase();
+    let host = host.trim_end_matches('.');
+    if site_of(&u) == page_site {
+        return false;
+    }
+    !THIRD_PARTY_OK.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
+/// Hook `blocked` into the window's WebView2: scripts, pictures and media the
+/// page asks for from anywhere else answer 403 without leaving the PC.
+#[cfg(windows)]
+fn block_ads<R: Runtime>(window: &tauri::WebviewWindow<R>, page_site: String) {
+    let _ = window.with_webview(move |w| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::*;
+        use webview2_com::WebResourceRequestedEventHandler;
+        let Ok(core) = w.controller().CoreWebView2() else { return };
+        let env = w.environment();
+        for ctx in [
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_SCRIPT,
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE,
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA,
+        ] {
+            let _ = core.AddWebResourceRequestedFilter(windows::core::w!("*"), ctx);
+        }
+        let handler = WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut uri = windows::core::PWSTR::null();
+            args.Request()?.Uri(&mut uri)?;
+            let uri = webview2_com::take_pwstr(uri);
+            if blocked(&page_site, &uri) {
+                let refused = env.CreateWebResourceResponse(None, 403, windows::core::w!("Blocked"), windows::core::w!(""))?;
+                args.SetResponse(&refused)?;
+            }
+            Ok(())
+        }));
+        let mut token = Default::default();
+        let _ = core.add_WebResourceRequested(&handler, &mut token);
+    });
+}
+
 fn file_name_of(url: &Url) -> Option<String> {
     let seg = url.path_segments()?.rfind(|s| !s.is_empty())?;
     let name = percent_encoding::percent_decode_str(seg).decode_utf8_lossy().to_string();
@@ -168,6 +246,8 @@ pub async fn solve<R: Runtime>(app: &AppHandle<R>, page: &str, host: &str) -> Re
     let (on_dl, on_nav, on_title, on_popup) = (shared.clone(), shared.clone(), shared.clone(), shared.clone());
     let start_page = url.clone();
     let site = site_of(&url);
+    #[cfg(windows)]
+    let ad_site = site.clone();
     let popup_app = app.clone();
     let builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(url.clone()))
         .title(format!("Kryoto: {host} download"))
@@ -216,6 +296,8 @@ pub async fn solve<R: Runtime>(app: &AppHandle<R>, page: &str, host: &str) -> Re
             true
         });
     let window = builder.build().map_err(|e| format!("could not open its page ({e})"))?;
+    #[cfg(windows)]
+    block_ads(&window, ad_site);
 
     let started = Instant::now();
     let mut shown = false;
@@ -338,6 +420,24 @@ mod tests {
         let u = |s: &str| s.parse::<Url>().unwrap();
         assert_eq!(site_of(&u("https://api.mocha.my/x")), site_of(&u("https://mocha.my/share/y")));
         assert_ne!(site_of(&u("https://ads.example.com/")), site_of(&u("https://mocha.my/")));
+    }
+
+    #[test]
+    fn a_mirror_page_keeps_its_own_site_and_checks_but_not_ads() {
+        let site = site_of(&"https://dropdrive.qsnetwork.dev/d/x".parse().unwrap());
+        // Its own pages, files and storage nodes.
+        assert!(!blocked(&site, "https://dropdrive.qsnetwork.dev/js/download.js"));
+        assert!(!blocked(&site, "https://dd-cdn-eu01.qsnetwork.dev/files/x"));
+        // The checks in front of the file, and public libraries.
+        assert!(!blocked(&site, "https://challenges.cloudflare.com/turnstile/v0/api.js"));
+        assert!(!blocked(&site, "https://unpkg.com/lucide@latest"));
+        assert!(!blocked(&site, "https://newassets.hcaptcha.com/c/x.js"));
+        // The ads.
+        assert!(blocked(&site, "https://intermediatenormalconfederate.com/60/50/94/x.js"));
+        assert!(blocked(&site, "https://acscdn.com/script/aclib.js"));
+        assert!(blocked(&site, "https://dd-plausible.example.net/js/pa.js"));
+        // Nothing that is not a web address.
+        assert!(!blocked(&site, "data:image/png;base64,AAAA"));
     }
 
     #[test]

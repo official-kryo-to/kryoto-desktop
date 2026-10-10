@@ -1189,7 +1189,12 @@ async fn identify<R: Runtime>(app: &AppHandle<R>, id: &str, client: &reqwest::Cl
     }
     let Ok(res) = client.get(format!("{base}/api/games/{slug}/downloads")).send().await else { return };
     let Ok(json) = res.json::<serde_json::Value>().await else { return };
-    let found = match_file(&json, &d.file_name);
+    let hint = FileHint {
+        size: d.total,
+        version: d.release.as_deref(),
+        page: d.mirror.as_ref().map(|m| m.page.as_str()),
+    };
+    let found = match_file_with(&json, &d.file_name, &hint);
     edit(app, id, |d| {
         if found.sha.is_some() {
             d.sha256 = found.sha;
@@ -1215,34 +1220,98 @@ pub struct FileMatch {
     pub release: Option<String>,
 }
 
+/// What the download itself knows about which build it is, beside its name.
+///
+/// THE NAME IS NOT ENOUGH. Every build of a game downloads as the same
+/// "<Title> - Kryoto.7z", so matching by name alone gave an older build the
+/// CURRENT build's hash, and every switch to an older build failed its check
+/// (Happy Wheels 1.99 against 1.99.2, October 2026). Each listed hash carries
+/// the file's size, which tells two builds apart without anything else; the
+/// version picked under Versions and the mirror page it came from pin it down
+/// where they are known.
+#[derive(Debug, Default)]
+pub struct FileHint<'a> {
+    /// The archive's size, once the transfer has it.
+    pub size: Option<u64>,
+    /// The version picked under Versions, when it is not the current one.
+    pub version: Option<&'a str>,
+    /// The mirror page it came from.
+    pub page: Option<&'a str>,
+}
+
+#[cfg(test)]
 pub fn match_file(json: &serde_json::Value, file: &str) -> FileMatch {
+    match_file_with(json, file, &FileHint::default())
+}
+
+pub fn match_file_with(json: &serde_json::Value, file: &str, hint: &FileHint) -> FileMatch {
     let same = |name: &str| safe_name(name).eq_ignore_ascii_case(file);
-    let hash_in = |v: &serde_json::Value| {
-        v["hashes"].as_array().and_then(|hs| {
-            hs.iter()
-                .find(|h| h["name"].as_str().is_some_and(same))
-                .and_then(|h| h["sha256"].as_str())
-                .filter(|s| s.len() == 64)
-                .map(|s| s.to_ascii_lowercase())
-        })
+    let hashes = |v: &serde_json::Value| -> Vec<(String, Option<u64>, bool)> {
+        v["hashes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|h| {
+                let sha = h["sha256"].as_str().filter(|s| s.len() == 64)?.to_ascii_lowercase();
+                let named = h["name"].as_str().is_some_and(same);
+                Some((sha, h["bytes"].as_u64(), named))
+            })
+            .collect()
     };
-    if let Some(sha) = hash_in(json) {
-        return FileMatch { sha: Some(sha), ..Default::default() };
-    }
-    // Another release (an older build, picked under Versions).
-    for release in json["releases"].as_array().into_iter().flatten() {
-        if let Some(sha) = hash_in(release) {
-            let other = !release["primary"].as_bool().unwrap_or(false);
-            return FileMatch {
-                sha: Some(sha),
-                release: other.then(|| release["version"].as_str().map(str::to_string)).flatten(),
-                ..Default::default()
-            };
+    let fits = |bytes: Option<u64>| match (hint.size, bytes) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    };
+    let releases: Vec<&serde_json::Value> = json["releases"].as_array().into_iter().flatten().collect();
+    let found = |release: &serde_json::Value, sha: String| {
+        let other = !release["primary"].as_bool().unwrap_or(false);
+        FileMatch {
+            sha: Some(sha),
+            release: other.then(|| release["version"].as_str().map(str::to_string)).flatten(),
+            ..Default::default()
+        }
+    };
+
+    // 1. The build is known: the version picked, or the mirror page it came
+    //    from. Its own hash, by name, or its only file when a mirror renamed it.
+    let picked = releases.iter().find(|r| {
+        hint.version.is_some_and(|v| r["version"].as_str() == Some(v))
+            || hint.page.is_some_and(|p| {
+                r["links"].as_array().into_iter().flatten().any(|l| l["url"].as_str() == Some(p))
+            })
+    });
+    if let Some(r) = picked {
+        let hs = hashes(r);
+        let by_name = hs.iter().find(|(_, b, named)| *named && fits(*b));
+        let only = (hs.len() == 1 && fits(hs[0].1) && hint.size.is_some()).then(|| &hs[0]);
+        if let Some((sha, _, _)) = by_name.or(only) {
+            return found(r, sha.clone());
         }
     }
+
+    // 2. Every release's file of this name, and the one whose size is the
+    //    archive's. With no size to go on, the current build, as before.
+    let named: Vec<(&serde_json::Value, String, Option<u64>)> = releases
+        .iter()
+        .flat_map(|r| hashes(r).into_iter().filter(|(_, _, n)| *n).map(move |(sha, b, _)| (*r, sha, b)))
+        .collect();
+    if hint.size.is_some() {
+        if let Some((r, sha, _)) = named.iter().find(|(_, _, b)| b.is_some() && fits(*b)) {
+            return found(r, sha.clone());
+        }
+    }
+    // A size that matches no build at all is still checked against the
+    // current one: a broken transfer must fail, not skip the check.
+    if let Some((sha, _, _)) = hashes(json).into_iter().find(|(_, _, n)| *n) {
+        return FileMatch { sha: Some(sha), ..Default::default() };
+    }
+    if let Some((r, sha, _)) = named.first() {
+        return found(r, sha.clone());
+    }
+
     for addon in json["addons"].as_array().into_iter().flatten() {
         let named = addon["links"].as_array().into_iter().flatten().any(|l| l["name"].as_str().is_some_and(same));
-        let hash = hash_in(addon);
+        let hash = hashes(addon).into_iter().find(|(_, _, n)| *n).map(|(sha, _, _)| sha);
         if named || hash.is_some() {
             let label = addon["label"].as_str().filter(|l| !l.trim().is_empty()).unwrap_or("Add-on").to_string();
             return FileMatch { sha: hash, addon: Some(label), release: None };
@@ -2888,6 +2957,43 @@ mod tests {
         assert_eq!(m.sha, Some("b".repeat(64)));
         assert_eq!(m.release.as_deref(), Some("1.4"));
         assert_eq!(match_file(&json, "Game - Kryoto.7z").release, None);
+    }
+
+    /// Every build downloads under the same name; the size says which it is.
+    #[test]
+    fn an_older_build_under_the_same_name_gets_its_own_hash() {
+        let json = serde_json::json!({
+            "hashes": [{ "name": "Happy Wheels - Kryoto.7z", "sha256": "a".repeat(64), "bytes": 216135135u64 }],
+            "releases": [
+                { "version": "1.99.2", "primary": true, "links": [],
+                  "hashes": [{ "name": "Happy Wheels - Kryoto.7z", "sha256": "a".repeat(64), "bytes": 216135135u64 }] },
+                { "version": "1.99", "primary": false,
+                  "links": [{ "host": "VikingFile", "url": "https://vikingfile.com/f/x" }],
+                  "hashes": [{ "name": "Happy Wheels - Kryoto.7z", "sha256": "b".repeat(64), "bytes": 388552088u64 }] }
+            ]
+        });
+        let file = "Happy Wheels - Kryoto.7z";
+        // Our copy, through the Store: only the size to go on.
+        let m = match_file_with(&json, file, &FileHint { size: Some(388552088), ..Default::default() });
+        assert_eq!(m.sha, Some("b".repeat(64)));
+        assert_eq!(m.release.as_deref(), Some("1.99"));
+        // The current build is still the current build.
+        let m = match_file_with(&json, file, &FileHint { size: Some(216135135), ..Default::default() });
+        assert_eq!(m.sha, Some("a".repeat(64)));
+        assert_eq!(m.release, None);
+        // Picked under Versions, before the size is known.
+        let m = match_file_with(&json, file, &FileHint { version: Some("1.99"), ..Default::default() });
+        assert_eq!(m.sha, Some("b".repeat(64)));
+        // From the old build's mirror, under whatever name the mirror gave it.
+        let m = match_file_with(
+            &json,
+            "renamed.7z",
+            &FileHint { size: Some(388552088), page: Some("https://vikingfile.com/f/x"), ..Default::default() },
+        );
+        assert_eq!(m.sha, Some("b".repeat(64)));
+        // A size no build has is still checked, against the current one.
+        let m = match_file_with(&json, file, &FileHint { size: Some(5), ..Default::default() });
+        assert_eq!(m.sha, Some("a".repeat(64)));
     }
 
     #[test]

@@ -486,6 +486,7 @@ pub async fn crack_tree(
     // decision that can be changed after the download instead of one that costs
     // a re-download to revisit.
     let mut rec = Recorder::new(game_dir, emulator);
+    let http = reqwest::Client::builder().user_agent("kryoto").build().unwrap_or_default();
 
     let mut replaced = 0usize;
     let mut interfaces = 0usize;
@@ -747,6 +748,18 @@ pub async fn crack_tree(
                 write_identity(&settings, identity)?;
                 for f in identity_files(identity) {
                     rec.added(&settings.join(f));
+                }
+                // The achievement list. Without it gbe_fork drops every
+                // unlock (see achievements.rs); a release that shipped its own
+                // keeps it. Never fatal: a build without achievements still
+                // plays.
+                match crate::achievements::write_gbe_schema(&http, &settings, appid).await {
+                    Ok(paths) => {
+                        for p in &paths {
+                            rec.added(p);
+                        }
+                    }
+                    Err(e) => warnings.push(format!("achievements: {e}")),
                 }
             }
             // Never reached - the `emu` lookup above returns None for a custom
