@@ -3,6 +3,7 @@ import { Download, Globe, Undo2 } from 'lucide-react'
 import { Button, Caption, Card, Label, Modal } from '@/ui'
 import { errorText } from '@/lib/bridge'
 import { fetchAddons, library, type KryoAddon, type LibraryGame } from '@/lib/library'
+import { GameRepair } from './GameRepair'
 
 const isOnline = (a: { label: string | null; source: string | null }) => /online/i.test(`${a.label ?? ''} ${a.source ?? ''}`)
 
@@ -24,6 +25,7 @@ export function AddonsCard({
   const [available, setAvailable] = useState<KryoAddon[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [repairOpen, setRepairOpen] = useState(false)
   const [confirm, setConfirm] = useState<{ kind: 'addon'; file: string; label: string; count: number } | { kind: 'online' } | null>(null)
 
   useEffect(() => {
@@ -134,7 +136,7 @@ export function AddonsCard({
                 Undo
               </Button>
             ) : (
-              <Button size="sm" disabled={!!busy} onClick={() => void run('online', () => library.onlineApply(game.id))}>
+              <Button size="sm" disabled={!!busy} onClick={() => setRepairOpen(true)}>
                 <Globe className="size-3" />
                 {busy === 'online' ? 'Setting up' : 'Set up'}
               </Button>
@@ -144,6 +146,7 @@ export function AddonsCard({
       ) : null}
 
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {repairOpen ? <Modal title="Repair game" onClose={() => setRepairOpen(false)}><GameRepair gameId={game.id} initialOnline /></Modal> : null}
 
       {confirm ? (
         <Modal

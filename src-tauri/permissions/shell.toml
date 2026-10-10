@@ -11,12 +11,20 @@
 identifier = "allow-shell"
 description = "Everything the desktop shell calls: the Store view, the library, games, downloads and settings."
 commands.allow = [
+  "repair_sources", "repair_state", "repair_apply", "repair_undo", "repair_support", "repair_support_url",
   "take_pending_link",
   "display_rendered",
   "game_logs",
   "game_log_read",
   "game_logs_folder",
   "library_prefix_folder",
+  "pad_start",
+  "pad_stop",
+  "pad_list",
+  "pad_config_get",
+  "pad_config_set",
+  "pad_rumble",
+  "pad_haptic",
   "display_state",
   "display_set_mode",
   "store_mount",

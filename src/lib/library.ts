@@ -233,6 +233,8 @@ export const library = {
   /** `null` when the game can use Kryoto Online, else why it cannot. */
   onlineCheck: (gameId: string) => call<string | null>('online_check', { gameId }),
   onlineApply: (gameId: string) => call<LibraryGame>('online_apply', { gameId }),
+  /** All clients share the same emulator repair/undo engine. */
+  repairApply: (gameId: string, source: string) => call('repair_apply', { gameId, source }),
   onlineUndo: (gameId: string) => call<LibraryGame>('online_undo', { gameId }),
 }
 

@@ -16,6 +16,8 @@ mod linux_overlay;
 mod logging;
 mod menus;
 mod online;
+mod repair;
+mod pad;
 mod placement;
 mod player_name;
 mod resolvers;
@@ -75,6 +77,9 @@ struct Account {
     /// Voice calls are rolled out to this account (flag `voice`).
     #[serde(default)]
     voice: bool,
+    /// Controller support is rolled out to this account (flag `controller`).
+    #[serde(default)]
+    controller: bool,
     /// Their Kryos balance (kryo.to's Hatchery coin), when they have a wallet.
     #[serde(default)]
     kryos: Option<i64>,
@@ -422,6 +427,7 @@ const BROWSER_STATE_SCRIPT: &str = r#"
           groups: !!(u.features && u.features.chat_groups),
           room: !!(u.features && u.features.chat_room),
           voice: !!(u.features && u.features.voice),
+          controller: !!(u.features && u.features.controller),
           kryos: coins,
           appearance: {
             palette: u.appearancePalette || null,
@@ -1006,6 +1012,7 @@ pub fn run() {
         .manage(menus::Menus::default())
         .manage(PendingDownload::default())
         .manage(chat::ChatState::default())
+        .manage(pad::Pads::default())
         .setup(move |app| {
             logging::init(app.handle());
             if let Err(e) = storage::recover_move(app.handle()) {
@@ -1125,7 +1132,14 @@ pub fn run() {
                 let _ = webview.eval(BROWSER_STATE_SCRIPT.replace("__KRYO__", if kryo { "true" } else { "false" }));
             }
         })
+        .manage(repair::Sessions::default())
         .invoke_handler(tauri::generate_handler![
+            repair::repair_sources,
+            repair::repair_state,
+            repair::repair_apply,
+            repair::repair_undo,
+            repair::repair_support,
+            repair::repair_support_url,
             links::take_pending_link,
             display_env::display_rendered,
             game_logs::game_logs,
@@ -1134,6 +1148,13 @@ pub fn run() {
             game_logs::game_log_read,
             game_logs::game_logs_folder,
             library::library_prefix_folder,
+            pad::pad_start,
+            pad::pad_stop,
+            pad::pad_list,
+            pad::pad_config_get,
+            pad::pad_config_set,
+            pad::pad_rumble,
+            pad::pad_haptic,
             display_env::display_state,
             display_env::display_set_mode,
             chat::chat_status,

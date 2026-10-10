@@ -477,3 +477,10 @@ html[data-window='popup'] body {
 html[data-window='popup'] [role='menuitem'] {
   border-radius: min(var(--kryo-radius), 6px);
 }
+
+/* Moving around with a controller (src/lib/pad-nav.ts): a selection you can
+   see from the couch, gone again once the mouse moves. */
+html.kryo-pad :focus {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}

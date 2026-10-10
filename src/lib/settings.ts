@@ -55,12 +55,12 @@ export const PLAYER_NAME_MAX = 32
 /** kryo.to's palettes, named as the site names them. */
 export const PALETTES: { id: Palette; label: string }[] = [
   { id: 'monochrome', label: 'Monochrome' },
-  { id: 'oled', label: 'OLED' },
-  { id: 'amber', label: 'Amber CRT' },
-  { id: 'emerald', label: 'Emerald' },
-  { id: 'nord', label: 'Nordic Slate' },
+  { id: 'oled', label: 'Black' },
+  { id: 'amber', label: 'Amber' },
+  { id: 'emerald', label: 'Green' },
+  { id: 'nord', label: 'Slate' },
   { id: 'sepia', label: 'Sepia' },
-  { id: 'blossom', label: 'Blossom' },
+  { id: 'blossom', label: 'Pink' },
 ]
 
 export const RADII: { value: Radius; label: string }[] = [

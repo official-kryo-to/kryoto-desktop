@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { artSrc } from '@/lib/art'
-import { Bell, Code2, Download, HardDrive, Heart, LogOut, Palette, ScrollText, Shield, SlidersHorizontal, User, Wrench } from 'lucide-react'
+import { Bell, Code2, Download, Gamepad2, HardDrive, Heart, LogOut, Palette, ScrollText, Shield, SlidersHorizontal, User, Wrench } from 'lucide-react'
 import { AsciiBar, Button, Caption, Check, Section, Segmented, inputCls } from '@/ui'
 import { errorText } from '@/lib/bridge'
 import { displayApi, PLAYER_NAME_MAX, settingsApi, useSettings, type DisplayMode, type DisplayState, type Settings } from '@/lib/settings'
@@ -13,6 +13,7 @@ import { chime, setSoundsOn, soundsOn } from '@/lib/sound'
 import { StoragePane } from '@/settings/StoragePane'
 import { CompatPane } from '@/settings/CompatPane'
 import { LogsPane } from '@/settings/LogsPane'
+import { ControllerPane } from '@/settings/ControllerPane'
 
 /**
  * Settings: one page for everything you can set.
@@ -33,6 +34,7 @@ export type SettingsSection =
   | 'general'
   | 'storage'
   | 'downloads'
+  | 'controller'
   | 'compat'
   | 'developer'
   | 'logs'
@@ -77,6 +79,8 @@ export function SettingsPage({
     { id: 'general', label: 'General', icon: <SlidersHorizontal /> },
     { id: 'storage', label: 'Storage', icon: <HardDrive /> },
     { id: 'downloads', label: 'Downloads', icon: <Download /> },
+    // Behind kryo.to's `controller` feature flag.
+    ...(account.controller ? [{ id: 'controller' as const, label: 'Controller', icon: <Gamepad2 /> }] : []),
     ...(isWindowsHost() ? [] : [{ id: 'compat' as const, label: 'Compatibility', icon: <Wrench /> }]),
     { id: 'developer', label: 'Developer', icon: <Code2 /> },
     { id: 'logs', label: 'Logs', icon: <ScrollText /> },
@@ -222,6 +226,7 @@ function DesktopPane({ section }: { section: SettingsSection }) {
     general: 'General',
     storage: 'Storage',
     downloads: 'Downloads',
+    controller: 'Controller',
     compat: 'Compatibility',
     logs: 'Logs',
     developer: 'Developer',
@@ -243,7 +248,8 @@ function DesktopPane({ section }: { section: SettingsSection }) {
 
   return (
     <div className="min-h-0 overflow-auto">
-      <div className="mx-auto grid max-w-3xl gap-7 px-8 py-8">
+      {/* The controller page is wider: the drawing and its labels need the room. */}
+      <div className={cn('mx-auto grid gap-7 px-8 py-8', section === 'controller' ? 'max-w-5xl' : 'max-w-3xl')}>
         <header className="flex items-baseline justify-between gap-4">
           <h1 className="text-xl font-bold text-foreground">{title[section]}</h1>
           <span className={cn('text-[10px] uppercase tracking-wider', state === 'saved' || state === 'saving' || state === 'idle' ? 'text-muted-foreground' : 'text-destructive')}>
@@ -254,7 +260,7 @@ function DesktopPane({ section }: { section: SettingsSection }) {
         {section === 'storage' ? <StoragePane onChanged={() => void settingsApi.get().then((v) => setS((cur) => (cur ? { ...cur, libraryDir: v.libraryDir, libraryFolders: v.libraryFolders } : v)))} /> : null}
         {section === 'downloads' ? (
           <>
-            <Section title="Connections" hint="More connections download faster on most lines, the way a download manager does. One is the slow, careful way.">
+            <Section title="Connections" hint="Connections per download. More may improve speed if the filehost allows it.">
               <Segmented
                 label="Download connections" value={String(s.connections)}
                 options={['1', '4', '8', '16', '32'].map((v) => ({ value: v, label: v }))}
@@ -297,6 +303,7 @@ function DesktopPane({ section }: { section: SettingsSection }) {
             <GraphicsSection />
           </>
         ) : null}
+        {section === 'controller' ? <ControllerPane /> : null}
         {section === 'compat' ? <CompatPane s={s} set={set} /> : null}
         {section === 'developer' ? (
           <Section title="Kryo.to endpoint" hint="Blank uses production. For local testing, use http://localhost:3000.">

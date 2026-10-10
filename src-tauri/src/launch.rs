@@ -188,7 +188,11 @@ pub fn parse_line(line: &str) -> ParsedLine {
 pub fn wine_overrides_for(source: Option<&str>) -> Option<&'static str> {
     let s = source.unwrap_or("").to_ascii_lowercase();
     if s.contains("kryoto online") {
-        Some("steam_api64=n,b;kryotoO=n,b;photon_universal=n,b")
+        Some("steam_api64=n,b;steam_api=n,b;kryotoO=n,b;kryotoO32=n,b;photon_universal=n,b")
+    } else if s.contains("steakclient") {
+        Some("steam_api64=n,b;steam_api=n,b;winmm=n,b;steakclient64=n,b")
+    } else if s.contains("rune") && s.contains("steamclient") {
+        Some("steam_api64=n,b;steam_api=n,b;steamclient64=n,b;steamclient=n,b;rune64=n,b;rune=n,b;GameOverlayRenderer64=n,b;GameOverlayRenderer=n,b")
     } else if s.contains("online-fix") || s.contains("onlinefix") || s.split_whitespace().any(|w| w == "ofme") {
         Some("OnlineFix64=n;SteamOverlay64=n;winmm=n,b;dnet=n;steam_api64=n")
     } else {
@@ -560,5 +564,7 @@ mod tests {
         assert!(wine_overrides_for(Some("OFME")).unwrap().contains("OnlineFix64"));
         assert_eq!(wine_overrides_for(Some("Steam + gbe_fork")), None);
         assert_eq!(wine_overrides_for(None), None);
+        assert!(wine_overrides_for(Some("Steam + RUNE steakclient")).unwrap().contains("winmm=n,b"));
+        assert!(wine_overrides_for(Some("Steam + RUNE steamclient")).unwrap().contains("rune64=n,b"));
     }
 }

@@ -497,6 +497,50 @@ const HANDLERS: Record<string, (a: Record<string, unknown>) => unknown> = {
   },
 }
 
+/** Controllers: a DualSense plugged in, an Xbox pad seen before. */
+const previewPads = [
+  {
+    id: 0,
+    guid: '030000004c050000e60c000011810000',
+    name: 'Sony Interactive Entertainment DualSense Wireless Controller',
+    vendor: 0x054c,
+    product: 0x0ce6,
+    model: { family: 'playstation', name: 'DualSense', features: { touchpad: true, gyro: true, paddles: 0, misc: true, analogTriggers: true }, matched: 'ids' },
+    rumble: true,
+    battery: 80,
+    charging: false,
+  },
+]
+let previewPadConfig = {
+  enabled: true,
+  navigate: true,
+  notify: true,
+  games: true,
+  haptics: true,
+  pads: {
+    '030000004c050000e60c000011810000': { name: 'DualSense', family: null, remap: {}, sdl: null },
+    '030000005e040000120b00000b050000': { name: 'Xbox Series X|S Controller', family: null, remap: { a: 'b', b: 'a' }, sdl: null },
+  } as Record<string, unknown>,
+}
+Object.assign(HANDLERS, {
+  pad_start: () => previewPads,
+  pad_stop: () => null,
+  pad_list: () => previewPads,
+  pad_config_get: () => previewPadConfig,
+  pad_config_set: (a: Record<string, unknown>) => (previewPadConfig = a.config as typeof previewPadConfig),
+  pad_rumble: () => null,
+  pad_haptic: () => null,
+  // Repair (src-tauri/src/repair.rs): the shared source list, nothing applied yet.
+  repair_sources: () => [
+    { id: 'gbe_fork', label: 'gbe_fork', online: false },
+    { id: 'online', label: 'Kryoto Online', online: true },
+    { id: 'rune', label: 'RUNE', online: false },
+    { id: 'rune_steak', label: 'RUNE (Steakclient)', online: false },
+    { id: 'rune_steamclient', label: 'RUNE (Steamclient)', online: false },
+  ],
+  repair_state: () => ({ undo_available: false, interrupted: false, report: null }),
+})
+
 export function previewCall<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   const handler = HANDLERS[command]
   if (!handler) return Promise.reject(new Error(`${command} needs the desktop app.`))

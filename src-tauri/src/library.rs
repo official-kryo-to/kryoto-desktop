@@ -65,6 +65,7 @@ pub struct LibraryGame {
     pub addons: Vec<crate::addons::InstalledAddon>,
     /// Kryoto Online set up on this PC (not from a kryo.to add-on), for Undo.
     pub online: Option<crate::online::LocalOnline>,
+    pub repair: Option<crate::repair::LocalRepair>,
     /// This game's in-game name, over Settings'; None follows Settings.
     pub player_name_mode: Option<crate::player_name::Mode>,
     pub player_name: String,
@@ -200,6 +201,8 @@ pub fn upsert_installed<R: Runtime>(app: &AppHandle<R>, mut game: LibraryGame) -
                 slot.default_args = game.default_args.clone();
                 slot.entries = game.entries.clone();
                 slot.source = game.source.clone();
+                // Repair metadata describes the previous installed files.
+                slot.repair = None;
                 slot.version = game.version.clone();
                 slot.pinned_version = game.pinned_version.clone();
                 slot.logo = game.logo.clone().or(slot.logo.take());
@@ -290,6 +293,9 @@ pub fn library_save(app: AppHandle, game: LibraryGame) -> Result<LibraryGame, St
         // Only applying and undoing change these, never the Properties window.
         next.addons = slot.addons.clone();
         next.online = slot.online.clone();
+        let had_repair = next.repair.is_some() || slot.repair.is_some();
+        next.repair = slot.repair.clone();
+        if had_repair { next.source = slot.source.clone(); next.apply_overrides = slot.apply_overrides; }
         next.player_name = crate::player_name::clean(&next.player_name).unwrap_or_default();
         if next.preferred_entry.is_some_and(|i| i >= next.entries.len()) {
             next.preferred_entry = None;
@@ -360,6 +366,8 @@ fn plan_for<R: Runtime>(app: &AppHandle<R>, game: &LibraryGame, entry: Option<us
         if settings.linux_fsr {
             env.push(("WINE_FULLSCREEN_FSR".to_string(), "1".to_string()));
         }
+        // Settings > Controller's remaps, for SDL, Wine and Proton.
+        env.extend(crate::pad::game_env(app));
     }
     let tool = own.or(fallback).or(detected);
     let tool_path = tool.as_deref().map(PathBuf::from);
@@ -408,6 +416,7 @@ pub fn game_launch(
     }
     let game = load(&app)?.into_iter().find(|g| g.id == id).ok_or("That game is no longer in the library.")?;
     let (mut plan, tool) = plan_for(&app, &game, entry)?;
+    crate::repair::can_launch(&app, &game)?;
     // From a game invite: start straight into the host's Steam lobby.
     if let Some(arg) = join_lobby.as_deref().and_then(crate::lobbies::connect_arg) {
         plan.game_args = format!("{} {arg}", plan.game_args).trim().to_string();

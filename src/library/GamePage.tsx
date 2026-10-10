@@ -23,6 +23,7 @@ export function GamePage({
   running,
   error,
   onDismissError,
+  onRepair,
   onPlay,
   onPlayEntry,
   onStop,
@@ -37,6 +38,7 @@ export function GamePage({
   running: boolean
   error: string | null
   onDismissError: () => void
+  onRepair: () => void
   onPlay: () => void
   onPlayEntry: (entry: number) => void
   onStop: () => void
@@ -256,6 +258,7 @@ export function GamePage({
       {error ? (
         <Banner tone="bad">
           <span className="grow text-xs">{error}</span>
+          <Button size="sm" variant="outline" disabled={running} onClick={onRepair}>Repair game</Button>
           <IconButton label="Dismiss" onClick={onDismissError} className="size-7">
             <X className="size-3.5" />
           </IconButton>

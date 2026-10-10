@@ -43,6 +43,10 @@ jobs:
       - name: Fetch kryoto-messaging
         shell: bash
         run: git clone --depth 1 https://github.com/official-kryo-to/kryoto-messaging.git ../kryoto-messaging
+      # The controller resolver (Cargo path dependency ../kryoto-padmap).
+      - name: Fetch kryoto-padmap
+        shell: bash
+        run: git clone --depth 1 https://github.com/official-kryo-to/kryoto-padmap.git ../kryoto-padmap
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -80,7 +84,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libxdo-dev libssl-dev
+            librsvg2-dev patchelf libxdo-dev libssl-dev libudev-dev
 
       - run: pnpm install --frozen-lockfile
 

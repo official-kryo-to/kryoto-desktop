@@ -1,6 +1,6 @@
 [package]
 name = "kryoto-desktop"
-version = "0.2.8"
+version = "0.2.9"
 description = "Kryoto's native desktop launcher shell."
 authors = ["Kryoto"]
 license = "MIT"
@@ -14,6 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+kryoto-repair = { path = "../crates/kryoto-repair" }
 tauri = { version = "2", features = ["unstable", "tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,6 +32,13 @@ percent-encoding = "2"
 notify-rust = "4"
 tauri-plugin-updater = "2.13"
 tauri-plugin-process = "2.4"
+# Controllers (kryo.to feature flag `controller`): gilrs reads them (Windows
+# Gaming Input, Linux evdev) and kryoto-padmap, our own open-source resolver,
+# says which pad it is, what its buttons are called and how a remap reaches
+# games. Path dependency while the repos sit side by side, like
+# kryoto-messaging; CI checks it out next to this repo.
+gilrs = "0.11"
+padmap = { path = "../../kryoto-padmap", features = ["serde", "sdl-db"] }
 
 # Chat (FRIENDS-AND-CHAT.md). All cryptography lives in kryoto-messaging; this
 # app only drives it. Path dependencies while the repos sit side by side; CI

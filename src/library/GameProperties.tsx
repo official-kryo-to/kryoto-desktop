@@ -20,14 +20,16 @@ import {
 } from '@/lib/library'
 import { cn } from '@/lib/utils'
 import { VersionsList, type GetOurs } from '@/library/Versions'
+import { GameRepair } from '@/library/GameRepair'
 import { GameLogs } from '@/library/GameLogs'
 
-type Tab = 'general' | 'compat' | 'files' | 'versions' | 'kryoto' | 'logs'
+type Tab = 'general' | 'compat' | 'files' | 'versions' | 'kryoto' | 'logs' | 'repair'
 
 const TABS = [
   ['general', 'General'],
   ...(isWindowsHost() ? [] : ([['compat', 'Compatibility']] as const)),
   ['files', 'Installed files'],
+  ['repair', 'Repair game'],
   ['versions', 'Builds'],
   ['kryoto', 'kryo.to'],
   ['logs', 'Logs'],
@@ -327,6 +329,7 @@ export function GameProperties({
           </>
         ) : null}
 
+        {tab === 'repair' ? <GameRepair gameId={game.id} /> : null}
         {tab === 'versions' ? (
           draft.slug ? (
             <Section title="Builds" hint="Every build kryo.to has of this game. Install any of them from our copy or one of its mirrors.">

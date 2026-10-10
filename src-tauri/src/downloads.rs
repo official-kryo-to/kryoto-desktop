@@ -2107,6 +2107,17 @@ async fn install<R: Runtime>(app: &AppHandle<R>, id: &str, settings: &crate::set
     let dest = existing
         .and_then(|g| crate::storage::game_folder(&folders, &g.install_dir))
         .unwrap_or_else(|| Path::new(&settings.library_dir).join(safe_name(&title)));
+    // An old repair backup must never restore files over a newer release.
+    // Keep the same lock as the fixer through installation and library saving.
+    let _repair_lock = if dest.join(".kryoto-repair").exists() {
+        let guard = kryoto_repair::journal::lock(&dest)?;
+        if kryoto_repair::journal::load(&dest)?.is_some_and(|r| r.state != "undone") {
+            return Err("Undo the game's repair under Properties > Repair before installing another release.".into());
+        }
+        Some(guard)
+    } else {
+        None
+    };
     let parent = dest.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(&settings.library_dir));
     let staging = parent.join(format!(".{}.installing", safe_name(&title)));
     if let Some(size) = unpacked_size(&archive) {

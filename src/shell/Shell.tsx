@@ -12,6 +12,7 @@ import {
   User,
   Layers,
   ScrollText,
+  Wrench,
   Wine,
 } from 'lucide-react'
 import { Button, Check, ContextMenu, Modal, type MenuEntry } from '@/ui'
@@ -40,6 +41,9 @@ import { isWebSection, SettingsPage, type SettingsSection } from '@/settings/Set
 import { useLibrary } from '@/hooks/useLibrary'
 import type { Account } from '@/hooks/useAccount'
 import { useInbox } from '@/hooks/useInbox'
+import { requestPad, useControllerFeature, usePadStore } from '@/hooks/usePads'
+import { usePadNavigation } from '@/lib/pad-nav'
+import { familyOf } from '@/lib/pad'
 import { setSavedStatus, useSaved } from '@/hooks/useSaved'
 import type { useBrowserPage } from '@/hooks/useBrowserPage'
 import { downloads, useDownloads } from '@/lib/downloads'
@@ -59,7 +63,7 @@ type Browser = ReturnType<typeof useBrowserPage>
 type Overlay =
   | { kind: 'add'; slug: string | null }
   | { kind: 'choose'; id: string }
-  | { kind: 'props'; id: string; tab?: 'versions' | 'logs' }
+  | { kind: 'props'; id: string; tab?: 'versions' | 'logs' | 'repair' }
   | { kind: 'uninstall'; id: string }
   | { kind: 'about' }
 
@@ -430,6 +434,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
   }, [takeLink])
 
   const manageMenu = (g: LibraryGame): MenuEntry[] => [
+    { label: 'Repair game', icon: <Wrench />, disabled: lib.running.has(g.id), onSelect: () => setOverlay({ kind: 'props', id: g.id, tab: 'repair' }) },
     { label: 'Properties', icon: <SettingsIcon />, onSelect: () => setOverlay({ kind: 'props', id: g.id }) },
     ...(g.slug ? [{ label: 'Builds', icon: <Layers />, onSelect: () => setOverlay({ kind: 'props', id: g.id, tab: 'versions' }) }] : []),
     {
@@ -615,6 +620,37 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
           ? 'community'
           : 'library'
 
+  // Controllers (kryo.to feature flag `controller`): read while the account
+  // has it, move around the client with one, and open Settings > Controller
+  // from a new pad's notification.
+  useControllerFeature(!!account.controller && !guest)
+  const padStore = usePadStore()
+  const firstPad = padStore.pads[0] ?? null
+  usePadNavigation({
+    enabled: padStore.on && !!padStore.config?.navigate,
+    haptics: !!padStore.config?.haptics,
+    paused: view.kind === 'settings' && view.section === 'controller',
+    family: familyOf(firstPad, firstPad ? padStore.config?.pads[firstPad.guid] : null),
+    onBack: back,
+    onTab: (step) => {
+      const i = tabs.findIndex((t) => t.id === currentTab)
+      tabs[(i + step + tabs.length) % tabs.length]?.onOpen()
+    },
+  })
+  useEffect(() => {
+    if (!account.controller) return
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void on<string>('pad-configure', (guid) => {
+      requestPad(guid)
+      openSettings('controller')
+    }).then((fn) => (cancelled ? fn() : (stop = fn)))
+    return () => {
+      cancelled = true
+      stop?.()
+    }
+  }, [account.controller, openSettings])
+
   const accountMenu: MenuEntry[] = guest
     ? [
         { label: 'Sign in to kryo.to', icon: <User />, onSelect: signIn },
@@ -752,6 +788,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
             running={lib.running.has(selected.id)}
             error={lib.error}
             onDismissError={() => lib.setError(null)}
+            onRepair={() => setOverlay({ kind: 'props', id: selected.id, tab: 'repair' })}
             onPlay={() => play(selected)}
             onPlayEntry={(i) => playEntry(selected, i)}
             onStop={() => void lib.stop(selected.id)}
