@@ -1,6 +1,6 @@
 [package]
 name = "kryoto-desktop"
-version = "0.2.10"
+version = "0.2.11"
 description = "Kryoto's native desktop launcher shell."
 authors = ["Kryoto"]
 license = "MIT"

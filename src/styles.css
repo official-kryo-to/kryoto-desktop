@@ -281,9 +281,31 @@ html[data-motion='reduced'] .kryo-matrix > i { animation: none !important; }
 }
 .kryo-blink { animation: kryo-blink 1s steps(1) infinite; }
 
-/* `.drag` areas move the window and `.no-drag` opts back out: done by
-   lib/window-drag.ts, not -webkit-app-region, which cost every button inside
-   its hand cursor in WebView2. */
+/* `.drag` areas are the window's title bar. On Windows that is native:
+   WebView2 (with wry's non-client region support) hands `app-region: drag`
+   to the system, so dragging, Aero Snap, double-click to maximize and the
+   right-click system menu are Windows' own. Controls sit outside `.drag` or
+   opt out with `.no-drag` (inside a drag region a control would lose its
+   cursor). WebKitGTK has no app-region; lib/window-drag.ts moves the window
+   there, and is the fallback anywhere the press still reaches the page. */
+.drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.no-drag,
+.drag button,
+.drag a,
+.drag [role='button'] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* The window buttons: Windows 11's own glyphs and sizes. */
+.kryo-caption {
+  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', sans-serif;
+  font-size: 10px;
+  line-height: 1;
+}
 
 /* Game art over the page: a fade into the background, in whatever palette. */
 .hero-fade {
@@ -483,4 +505,34 @@ html[data-window='popup'] [role='menuitem'] {
 html.kryo-pad :focus {
   outline: 3px solid var(--primary);
   outline-offset: 2px;
+}
+
+/* Tooltips (ui/GlobalTooltip.tsx), as kryo.to draws them. */
+.kryo-global-tooltip {
+  pointer-events: none;
+  animation: kryo-tooltip-in 120ms ease-out both;
+}
+.kryo-tooltip-out {
+  animation: kryo-tooltip-out 80ms ease-in both !important;
+}
+@keyframes kryo-tooltip-in {
+  from { opacity: 0; transform: translateY(2px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes kryo-tooltip-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(2px) scale(0.97); }
+}
+
+/* Big Picture (bigpicture/BigPicture.tsx): the tile in focus comes forward. */
+.kryo-bp-tile {
+  transition: transform var(--kryo-dur-fast) var(--kryo-ease-out), box-shadow var(--kryo-dur-fast);
+}
+.kryo-bp-tile:focus-visible,
+html.kryo-pad .kryo-bp-tile:focus {
+  transform: scale(var(--bp-grow, 1.04));
+  outline: 3px solid var(--primary);
+  outline-offset: 3px;
+  position: relative;
+  z-index: 1;
 }

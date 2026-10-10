@@ -26,6 +26,7 @@ commands.allow = [
   "pad_rumble",
   "pad_haptic",
   "pad_capture",
+  "pad_forward",
   "pad_mapping_set",
   "pad_virtual_driver",
   "display_state",

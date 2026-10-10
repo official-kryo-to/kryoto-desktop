@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { PopupApp } from './popup/PopupApp'
+import { GlobalTooltip } from './ui/GlobalTooltip'
 import { installErrorLogging } from './lib/log'
 import { installWindowDrag } from './lib/window-drag'
 import { call } from './lib/bridge'
@@ -25,7 +26,17 @@ installErrorLogging(label)
 installWindowDrag()
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>{label === 'popup' ? <PopupApp /> : <App />}</StrictMode>,
+  <StrictMode>
+    {label === 'popup' ? (
+      <PopupApp />
+    ) : (
+      <>
+        <App />
+        {/* Every `title` as Kryoto's own tooltip. */}
+        <GlobalTooltip />
+      </>
+    )}
+  </StrictMode>,
 )
 
 // The first frame is on screen: tell the Linux build this start drew, so it

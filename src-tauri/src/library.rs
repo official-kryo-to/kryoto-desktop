@@ -95,15 +95,37 @@ fn data_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// The library: `library.json`, or, when that cannot be read, what
+/// [`recover`] makes of it. A damaged list never stops the app: before, every
+/// later save failed on it too ("library.json is damaged"), so not even a new
+/// download could be added.
 pub(crate) fn load<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<LibraryGame>, String> {
     let file = data_dir(app)?.join("library.json");
-    match std::fs::read_to_string(&file) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("library.json is damaged: {e}")),
+    match std::fs::read(&file) {
+        Ok(bytes) => match parse(&bytes) {
+            Some(games) => Ok(games),
+            None => Ok(recover(app)),
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(e.to_string()),
     }
 }
 
+/// A library list, or `None` when the bytes are not one: empty, cut short,
+/// or the run of zero bytes a file becomes when Windows lost power after
+/// recording its size but before writing its data.
+fn parse(bytes: &[u8]) -> Option<Vec<LibraryGame>> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    if text.trim_matches(|c: char| c.is_whitespace() || c == '\0').is_empty() {
+        return None;
+    }
+    serde_json::from_str(text).ok()
+}
+
+/// Write the list: to a temporary file, flushed to the disk, then swapped in,
+/// so a crash leaves the old list or the new one, never half of one. The list
+/// being replaced is kept as `library.json.bak` (when it was readable), which
+/// is what [`recover`] goes back to first.
 fn save<R: Runtime>(app: &AppHandle<R>, games: &[LibraryGame]) -> Result<(), String> {
     let dir = data_dir(app)?;
     let tmp = dir.join("library.json.tmp");
@@ -113,7 +135,197 @@ fn save<R: Runtime>(app: &AppHandle<R>, games: &[LibraryGame]) -> Result<(), Str
     file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
     drop(file);
-    std::fs::rename(&tmp, dir.join("library.json")).map_err(|e| e.to_string())
+    let current = dir.join("library.json");
+    if let Ok(old) = std::fs::read(&current) {
+        if parse(&old).is_some_and(|g| !g.is_empty()) {
+            let _ = write_synced(&dir.join("library.json.bak"), &old);
+        }
+    }
+    std::fs::rename(&tmp, current).map_err(|e| e.to_string())
+}
+
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// Each installed game also keeps its own entry in its folder
+/// (`.kryoto-game.json`), so a lost list can be rebuilt exactly from the
+/// folders themselves. Best effort: a read-only folder just has none.
+pub(crate) fn write_marker(game: &LibraryGame) {
+    if game.install_dir.is_empty() {
+        return;
+    }
+    let dir = Path::new(&game.install_dir);
+    if !dir.is_dir() {
+        return;
+    }
+    if let Ok(json) = serde_json::to_vec_pretty(game) {
+        let _ = write_synced(&dir.join(MARKER), &json);
+    }
+}
+
+const MARKER: &str = ".kryoto-game.json";
+
+/// One recovery at a time; the others wait and read its result.
+static RECOVER: Mutex<()> = Mutex::new(());
+
+/// `library.json` cannot be read. Keep it (renamed, for support), then:
+///
+/// 1. the list before the last change (`library.json.bak`), or else
+/// 2. the game folders themselves: each one's `.kryoto-game.json`, else a
+///    Forge release's `.kryoto-release.json`, else any folder with a game in
+///    it, by its folder name. The ones not yet linked to kryo.to are looked
+///    up there by name afterwards, for their art and launch options.
+///
+/// The result is saved, and the app says what happened.
+fn recover<R: Runtime>(app: &AppHandle<R>) -> Vec<LibraryGame> {
+    let Ok(_guard) = RECOVER.lock() else { return Vec::new() };
+    let Ok(dir) = data_dir(app) else { return Vec::new() };
+    let file = dir.join("library.json");
+    // Another call got here first and already put a list back.
+    if let Some(games) = std::fs::read(&file).ok().and_then(|b| parse(&b)) {
+        return games;
+    }
+    let damaged = dir.join(format!("library.json.damaged-{}", now()));
+    let _ = std::fs::rename(&file, &damaged);
+    let (games, how) = match std::fs::read(dir.join("library.json.bak")).ok().and_then(|b| parse(&b)) {
+        Some(games) if !games.is_empty() => (games, "its last good copy"),
+        _ => (rebuild_from_folders(app), "the game folders"),
+    };
+    let _ = save(app, &games);
+    crate::logging::error(
+        "library",
+        &format!("library.json was damaged ({}); restored {} game(s) from {how}", damaged.display(), games.len()),
+    );
+    let body = if games.is_empty() {
+        "Kryoto could not find your games again. Add them with Add a game, or ask support: the damaged list is kept.".to_string()
+    } else {
+        format!("Kryoto put {} game(s) back from {how}. Nothing was deleted.", games.len())
+    };
+    let _ = app.emit("notify", crate::downloads::Notice::new("Your library list was damaged", &body, None));
+    if games.iter().any(|g| g.slug.is_none()) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { relink(&app).await });
+    }
+    games
+}
+
+/// Every game folder in the library folders, as library entries.
+fn rebuild_from_folders<R: Runtime>(app: &AppHandle<R>) -> Vec<LibraryGame> {
+    let settings = crate::settings::load(app);
+    let mut roots: Vec<PathBuf> = vec![PathBuf::from(&settings.library_dir)];
+    roots.extend(settings.library_folders.iter().map(PathBuf::from));
+    let mut games: Vec<LibraryGame> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for root in roots {
+        let Ok(read) = std::fs::read_dir(&root) else { continue };
+        for entry in read.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // `.Title.installing` staging folders and other hidden ones.
+            if !path.is_dir() || name.starts_with('.') || !seen.insert(path.clone()) {
+                continue;
+            }
+            if let Some(game) = from_folder(&path, &name) {
+                games.push(game);
+            }
+        }
+    }
+    // Unique ids, as `upsert_installed` makes them.
+    let mut ids = std::collections::HashSet::new();
+    for g in games.iter_mut() {
+        let base = if g.id.is_empty() { g.slug.clone().unwrap_or_else(|| slugify(&g.title)) } else { g.id.clone() };
+        let mut id = base.clone();
+        let mut n = 2;
+        while !ids.insert(id.clone()) {
+            id = format!("{base}-{n}");
+            n += 1;
+        }
+        g.id = id;
+    }
+    games
+}
+
+fn from_folder(path: &Path, name: &str) -> Option<LibraryGame> {
+    let install_dir = path.to_string_lossy().into_owned();
+    // Our own entry, written at install.
+    if let Some(mut game) = std::fs::read(path.join(MARKER)).ok().and_then(|b| serde_json::from_slice::<LibraryGame>(&b).ok()) {
+        game.install_dir = install_dir;
+        return Some(game);
+    }
+    let release: Option<serde_json::Value> = std::fs::read(path.join(".kryoto-release.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let (root, executable) = crate::downloads::locate(path, "");
+    if executable.is_empty() {
+        return None; // not a game folder
+    }
+    let slug = release
+        .as_ref()
+        .and_then(|r| r["slug"].as_str())
+        .filter(|s| !s.is_empty() && s.len() <= 160 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .map(String::from);
+    let title = release.as_ref().and_then(|r| r["title"].as_str()).map(String::from).unwrap_or_else(|| name.to_string());
+    Some(LibraryGame {
+        title,
+        slug,
+        install_dir: root.to_string_lossy().into_owned(),
+        executable,
+        apply_overrides: true,
+        added_at: now(),
+        ..Default::default()
+    })
+}
+
+/// Rebuilt entries with no kryo.to link: find each one on kryo.to by its
+/// name (the folder is named after the game), then fill in its art, launch
+/// entries and details the way an install does.
+async fn relink<R: Runtime>(app: &AppHandle<R>) {
+    let settings = crate::settings::load(app);
+    let endpoint = crate::settings::catalog_endpoint(&settings);
+    let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build() else { return };
+    let Ok(games) = load(app) else { return };
+    let mut found: Vec<(String, String, crate::downloads::CatalogMeta)> = Vec::new();
+    for g in games.iter().filter(|g| g.slug.is_none()) {
+        let Some(slug) = crate::downloads::find_slug(&client, &endpoint, &g.title).await else { continue };
+        if let Some(meta) = crate::downloads::fetch_meta(&client, &endpoint, &slug).await {
+            found.push((g.id.clone(), slug, meta));
+        }
+    }
+    if found.is_empty() {
+        return;
+    }
+    let _ = update(app, |games| {
+        for (id, slug, meta) in &found {
+            let Some(g) = games.iter_mut().find(|g| &g.id == id) else { continue };
+            // Another game already has this link: leave this one as it is.
+            g.slug = Some(slug.clone());
+            if !meta.title.is_empty() {
+                g.title = meta.title.clone();
+            }
+            g.cover = meta.cover.clone();
+            g.hero = meta.hero.clone();
+            g.logo = meta.logo.clone();
+            g.header = meta.header.clone();
+            g.short = meta.short.clone();
+            g.developer = meta.developer.clone();
+            g.nsfw = meta.nsfw;
+            g.source = meta.source.clone();
+            g.default_args = meta.default_args.clone();
+            g.entries = meta.entries.clone();
+            if !meta.executable.is_empty() {
+                let (root, exe) = crate::downloads::locate(Path::new(&g.install_dir), &meta.executable);
+                if exe.to_ascii_lowercase().ends_with(&meta.executable.replace('\\', "/").to_ascii_lowercase()) {
+                    g.install_dir = root.to_string_lossy().into_owned();
+                    g.executable = exe;
+                }
+            }
+            write_marker(g);
+        }
+        Ok(())
+    });
+    let _ = app.emit("library-changed", ());
 }
 
 /// Library writes are serialised: a game closing while Properties saves must
@@ -231,6 +443,7 @@ pub fn upsert_installed<R: Runtime>(app: &AppHandle<R>, mut game: LibraryGame) -
         games.push(game.clone());
         Ok(game)
     })
+    .inspect(write_marker)
 }
 
 pub(crate) fn dir_size(path: &Path) -> u64 {
@@ -303,6 +516,7 @@ pub fn library_save(app: AppHandle, game: LibraryGame) -> Result<LibraryGame, St
         *slot = next.clone();
         Ok(next)
     })
+    .inspect(write_marker)
 }
 
 /// Take it off the list, and with `delete_files` uninstall it too.
@@ -685,7 +899,46 @@ pub fn open_folder(path: String, create: Option<bool>) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::slugify;
+    use super::{from_folder, parse, slugify, LibraryGame, MARKER};
+
+    #[test]
+    fn a_zeroed_or_empty_list_is_damaged_not_empty() {
+        // What a player sent: 23,597 zero bytes, a file Windows had sized but
+        // never written.
+        assert!(parse(&vec![0u8; 23_597]).is_none());
+        assert!(parse(b"").is_none());
+        assert!(parse(b"  
+").is_none());
+        assert!(parse(b"[{\"id\":").is_none());
+        assert_eq!(parse(b"[]").map(|g| g.len()), Some(0));
+        assert_eq!(parse(br#"[{"id":"a","title":"A"}]"#).map(|g| g[0].title.clone()), Some("A".into()));
+    }
+
+    #[test]
+    fn folders_come_back_as_games() {
+        let root = std::env::temp_dir().join(format!("kryoto-rebuild-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // An install with its marker: back exactly as it was.
+        let marked = root.join("Celeste");
+        std::fs::create_dir_all(marked.join("bin")).unwrap();
+        std::fs::write(marked.join("bin/Celeste.exe"), b"MZ").unwrap();
+        let entry = LibraryGame { id: "celeste".into(), title: "Celeste".into(), slug: Some("celeste".into()), executable: "bin/Celeste.exe".into(), playtime_seconds: 3600, ..Default::default() };
+        std::fs::write(marked.join(MARKER), serde_json::to_vec(&entry).unwrap()).unwrap();
+        let g = from_folder(&marked, "Celeste").unwrap();
+        assert_eq!((g.slug.as_deref(), g.playtime_seconds, g.install_dir.as_str()), (Some("celeste"), 3600, marked.to_string_lossy().as_ref()));
+        // An older install: named after its folder, its game found inside.
+        let plain = root.join("Hades II");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("Hades2.exe"), b"MZ").unwrap();
+        std::fs::write(plain.join("unins000.exe"), b"MZ").unwrap();
+        let g = from_folder(&plain, "Hades II").unwrap();
+        assert_eq!((g.title.as_str(), g.executable.as_str(), g.slug), ("Hades II", "Hades2.exe", None));
+        // Not a game.
+        let empty = root.join("notes");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(from_folder(&empty, "notes").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn ids_are_readable() {

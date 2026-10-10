@@ -23,12 +23,15 @@ const isSort = (v: string): v is Sort => v in SORTS
  * Steam's Recent shelf and every game as a poster grid with Play on hover.
  */
 export function LibraryHome({
+  top,
   games,
   running,
   onOpen,
   onPlay,
   onContext,
 }: {
+  /** Above everything else (the controller welcome). */
+  top?: React.ReactNode
   games: LibraryGame[]
   running: Set<string>
   onOpen: (id: string) => void
@@ -56,6 +59,7 @@ export function LibraryHome({
 
   return (
     <div className="grid min-h-0 grow content-start gap-8 overflow-auto p-6">
+      {top}
       {last ? (
         <section
           onContextMenu={ctx(last)}

@@ -326,6 +326,20 @@ pub fn pad_haptic(pads: State<'_, Pads>, id: u32, kind: Haptic) {
     send(&pads, Req::Haptic(id, kind));
 }
 
+/// A press (or the sticks) for the Store's page: kryo.to moves around by
+/// controller on its own (components/gamepad/gamepad-layer.tsx) and takes the
+/// app's input as `kryo-pad` events, so the player's own setup works there
+/// too. A press also gives the Store the keyboard, so its selection shows.
+#[tauri::command]
+pub fn pad_forward(app: AppHandle, detail: serde_json::Value) {
+    let Some(view) = app.get_webview(crate::STORE) else { return };
+    let Ok(json) = serde_json::to_string(&detail) else { return };
+    if detail["type"] == "button" && detail["pressed"] == true {
+        let _ = view.set_focus();
+    }
+    let _ = view.eval(format!("window.dispatchEvent(new CustomEvent('kryo-pad',{{detail:{json}}}))"));
+}
+
 /// The setup listens to this pad's raw inputs (`pad-raw`), or stops.
 #[tauri::command]
 pub fn pad_capture(pads: State<'_, Pads>, id: Option<u32>) {

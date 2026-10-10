@@ -43,6 +43,9 @@ import type { Account } from '@/hooks/useAccount'
 import { useInbox } from '@/hooks/useInbox'
 import { requestPad, useControllerFeature, usePadStore } from '@/hooks/usePads'
 import { usePadNavigation } from '@/lib/pad-nav'
+import { BigPicture } from '@/bigpicture/BigPicture'
+import { ControllerWelcome } from '@/controller/ControllerWelcome'
+import { PadHints } from '@/controller/PadHints'
 import { familyOf } from '@/lib/pad'
 import { setSavedStatus, useSaved } from '@/hooks/useSaved'
 import type { useBrowserPage } from '@/hooks/useBrowserPage'
@@ -197,10 +200,17 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
   /* ── Overlays over the native web view ── */
   const [overlay, setOverlay] = useState<Overlay | null>(null)
   const [ctx, setCtx] = useState<{ game: LibraryGame; x: number; y: number } | null>(null)
+  // Big Picture: full screen, over everything, the Store hidden under it.
+  const [bigPicture, setBigPicture] = useState(false)
   // Menus open in their own window over the Store; only dialogs hide it.
   const online = useOnline()
   const storeVisible =
-    online && (view.kind === 'web' || (view.kind === 'settings' && isWebSection(view.section))) && !overlay && !page.error && !settings?.recoveryError
+    online &&
+    (view.kind === 'web' || (view.kind === 'settings' && isWebSection(view.section))) &&
+    !overlay &&
+    !bigPicture &&
+    !page.error &&
+    !settings?.recoveryError
   // A guest has no kryo.to settings to show; the client's own are all there is.
   const openSettings = useCallback(
     (section: SettingsSection = 'general') => go({ kind: 'settings', section: guest && isWebSection(section) ? 'general' : section }),
@@ -515,6 +525,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
         { separator: true },
         { label: 'Reload page', hint: 'Ctrl R', disabled: view.kind !== 'web', onSelect: () => web.reload() },
         { label: 'Full screen', hint: 'F11', onSelect: () => void toggleFullscreen().catch(() => {}) },
+        ...(account.controller ? [{ label: 'Big Picture', onSelect: () => setBigPicture(true) }] : []),
       ],
     },
     {
@@ -632,6 +643,8 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
     paused: view.kind === 'settings' && view.section === 'controller',
     family: familyOf(firstPad, firstPad ? padStore.config?.pads[firstPad.guid] : null),
     onBack: back,
+    onGuide: () => setBigPicture((b) => !b),
+    forward: storeVisible && !bigPicture,
     onTab: (step) => {
       const i = tabs.findIndex((t) => t.id === currentTab)
       tabs[(i + step + tabs.length) % tabs.length]?.onOpen()
@@ -809,6 +822,7 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
           <EmptyLibrary onStore={() => openWeb('/')} onAdd={() => setOverlay({ kind: 'add', slug: null })} />
         ) : (
           <LibraryHome
+            top={account.controller ? <ControllerWelcome onBigPicture={() => setBigPicture(true)} onSetup={() => openSettings('controller')} /> : null}
             games={lib.games}
             running={lib.running}
             onOpen={(id) => go({ kind: 'game', id })}
@@ -864,6 +878,9 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
         </div>
         {content}
       </main>
+      {padStore.on && padStore.config?.navigate && !bigPicture ? (
+        <PadHints family={familyOf(firstPad, firstPad ? padStore.config?.pads[firstPad.guid] : null)} store={storeVisible} />
+      ) : null}
       <BottomBar
         downloads={dl}
         notice={view.kind === 'web' ? (toasts[toasts.length - 1] ?? null) : null}
@@ -974,6 +991,16 @@ export function Shell({ startPage, account, browser }: { startPage: 'store' | 'l
         </Modal>
       ) : null}
       {account.voice ? <CallOverlay nameOf={callerName} /> : null}
+      {bigPicture ? (
+        <BigPicture
+          games={lib.games}
+          running={lib.running}
+          onPlay={play}
+          onStop={(g) => void lib.stop(g.id)}
+          onExit={() => setBigPicture(false)}
+          playerName={account.displayName || account.username || 'Guest'}
+        />
+      ) : null}
     </div>
   )
 }

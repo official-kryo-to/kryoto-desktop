@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { FACE, glyphBits, padArt, paletteOf, PALETTE, type PadControl, type PadFamily, type Tone } from '@/lib/pad-art'
-import type { PadAxesEvent } from '@/lib/pad'
+import { padLabel, type PadAxesEvent } from '@/lib/pad'
 import { cn } from '@/lib/utils'
 
 /**
@@ -91,12 +91,12 @@ export function PadArtView({
         return (
           <g
             key={i}
+            data-kryo-tooltip={c && names ? names(c) : undefined}
             transform={dx || y ? `translate(${dx} ${y})` : undefined}
             onClick={c && onPick ? () => onPick(c) : undefined}
             onMouseEnter={c ? () => onHover?.(c) : undefined}
             className={cn(c && onPick && 'cursor-pointer')}
           >
-            {c && names ? <title>{names(c)}</title> : null}
             {layer.paths.map((p) =>
               held && p.tone === 'shadow' ? null : (
                 <path
@@ -256,6 +256,8 @@ export function PadBadge({ family, control, label, className }: { family: PadFam
   const face = control === 'a' || control === 'b' || control === 'x' || control === 'y' ? FACE[family][control] : null
   const symbol = face && GLYPHS_5.has(face[0]) ? face[0] : null
   const color = face && face[1] !== 'glyph' ? PALETTE[face[1]] : undefined
+  // The d-pad as a little cross: "Up" says less than the shape does.
+  const dpad = control === 'dpup' || control === 'dpdown' || control === 'dpleft' || control === 'dpright'
   return (
     <span
       className={cn(
@@ -266,17 +268,21 @@ export function PadBadge({ family, control, label, className }: { family: PadFam
       style={color ? { color } : undefined}
       title={label}
     >
-      {symbol ? (
+      {symbol || dpad ? (
         <svg viewBox="0 0 5 5" className="size-2.5" shapeRendering="crispEdges" aria-label={label}>
-          {glyphBits(symbol).flatMap((row, y) =>
+          {(symbol ? glyphBits(symbol) : DPAD_GLYPH).flatMap((row, y) =>
             [...row].map((ch, x) => (ch === '#' ? <rect key={`${x}-${y}`} x={x} y={y} width={1} height={1} fill="currentColor" /> : null)),
           )}
         </svg>
       ) : (
-        <span aria-hidden>{face ? face[0] : label}</span>
+        // What the pad prints: A, L1, ZR, PS, View.
+        <span aria-hidden>{face ? face[0] : padLabel(family, control).short}</span>
       )}
     </span>
   )
 }
 
 const GLYPHS_5 = new Set(['cross', 'circle', 'square', 'triangle'])
+/** A d-pad's cross, in the same 5x5 cells as the face symbols. */
+/** A d-pad's cross, in the same 5x5 cells as the face symbols. */
+const DPAD_GLYPH = ['..#..', '..#..', '#####', '..#..', '..#..']

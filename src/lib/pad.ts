@@ -94,6 +94,8 @@ export const padApi = {
   save: (config: PadConfig) => call<PadConfig>('pad_config_set', { config }),
   rumble: (id: number) => call<void>('pad_rumble', { id }),
   haptic: (id: number, kind: PadHaptic) => call<void>('pad_haptic', { id, kind }),
+  /** Hand a press or the sticks to the Store's page (kryo.to moves around by itself). */
+  forward: (detail: Record<string, unknown>) => call<void>('pad_forward', { detail }),
   /** Listen to one pad's raw inputs (`pad-raw`), for the setup; `null` stops. */
   capture: (id: number | null) => call<void>('pad_capture', { id }),
   /** Save a setup (SDL field -> source), or forget it with `null`. */

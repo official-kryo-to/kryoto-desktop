@@ -11,11 +11,20 @@ import type { PadControl, PadFamily } from '@/lib/pad-art'
  * - A (on Nintendo pads, the A on the right): press what is selected.
  * - B: close the open menu or dialog, else go back.
  * - LB / RB: the previous or next page in the top bar.
+ * - Home: Big Picture, in or out.
+ *
+ * A page that has its own idea of back, page and Home (Big Picture) claims
+ * them first: `kryo-pad-back`, `kryo-pad-tab` and `kryo-pad-guide` are sent on
+ * the window as cancelable events, and only an unclaimed one does the default.
  * - Right stick: scroll.
  *
  * With `haptics`, the pad answers: a light tick as the selection moves, a
  * firmer pulse on select, back and a page change, a bump when there is
  * nothing further that way.
+ *
+ * While the Store shows (`forward`), the d-pad, A, B, Y and the sticks go to
+ * its page instead (kryo.to moves around by itself, as `kryo-pad` events);
+ * the bumpers and Home stay with the app.
  *
  * Presses only arrive while Kryoto is in front (pad.rs), so a game being
  * played never drives it. `paused` hands the pad to the page (Settings >
@@ -107,8 +116,14 @@ function press() {
   el.click()
 }
 
+/** Offer a press to the page first; true when something claimed it. */
+function claimed(name: string, detail?: unknown): boolean {
+  return !window.dispatchEvent(new CustomEvent(name, { cancelable: true, detail }))
+}
+
 /** Close what is open (Escape, as every menu here listens for); else `back`. */
 function goBack(back: () => void) {
+  if (claimed('kryo-pad-back')) return
   if (scope() !== document) {
     const target = document.activeElement ?? document.body
     target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
@@ -144,6 +159,8 @@ export function usePadNavigation({
   family,
   onBack,
   onTab,
+  onGuide,
+  forward = false,
 }: {
   enabled: boolean
   haptics: boolean
@@ -151,10 +168,14 @@ export function usePadNavigation({
   family: PadFamily
   onBack: () => void
   onTab: (step: -1 | 1) => void
+  /** Home on the pad: Big Picture. */
+  onGuide?: () => void
+  /** The Store's page is showing: it gets the moving around. */
+  forward?: boolean
 }) {
   // The latest of everything, without re-subscribing on each render.
-  const live = useRef({ haptics, paused, family, onBack, onTab })
-  live.current = { haptics, paused, family, onBack, onTab }
+  const live = useRef({ haptics, paused, family, onBack, onTab, onGuide, forward })
+  live.current = { haptics, paused, family, onBack, onTab, onGuide, forward }
 
   useEffect(() => {
     if (!enabled) return
@@ -198,7 +219,14 @@ export function usePadNavigation({
 
     void on<PadButtonEvent>('pad-button', ({ id, control, pressed }) => {
       lastPad = id
-      const { paused, family, onBack, onTab } = live.current
+      const { paused, family, onBack, onTab, onGuide, forward } = live.current
+      // The pad is in use: the hint bar and the selection's ring show.
+      document.documentElement.classList.add('kryo-pad')
+      if (!paused && forward && !['leftshoulder', 'rightshoulder', 'guide'].includes(control)) {
+        void padApi.forward({ type: 'button', control, pressed, family }).catch(() => {})
+        if (pressed) feel('tick')
+        return
+      }
       if (paused) {
         // Hold back to leave a page that has the pad.
         if (control === backOf(family)) {
@@ -217,7 +245,11 @@ export function usePadNavigation({
         goBack(onBack)
         feel('select')
       } else if (control === 'leftshoulder' || control === 'rightshoulder') {
-        onTab(control === 'leftshoulder' ? -1 : 1)
+        const step = control === 'leftshoulder' ? -1 : 1
+        if (!claimed('kryo-pad-tab', step)) onTab(step)
+        feel('select')
+      } else if (control === 'guide') {
+        if (!claimed('kryo-pad-guide')) onGuide?.()
         feel('select')
       }
     }).then(keep)
@@ -225,6 +257,10 @@ export function usePadNavigation({
     void on<PadAxesEvent>('pad-axes', ({ id, lx, ly, rx, ry }) => {
       if (live.current.paused) return
       if (Math.max(Math.abs(lx), Math.abs(ly)) > 0.6) lastPad = id
+      if (live.current.forward) {
+        void padApi.forward({ type: 'axes', lx, ly, rx, ry, family: live.current.family }).catch(() => {})
+        return
+      }
       // The left stick as a d-pad, with some give before it lets go.
       const mag = Math.max(Math.abs(lx), Math.abs(ly))
       const dir: Dir | null =

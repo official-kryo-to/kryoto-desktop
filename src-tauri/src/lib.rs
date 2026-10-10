@@ -1156,6 +1156,7 @@ pub fn run() {
             pad::pad_rumble,
             pad::pad_haptic,
             pad::pad_capture,
+            pad::pad_forward,
             pad::pad_mapping_set,
             pad::pad_virtual_driver,
             display_env::display_state,

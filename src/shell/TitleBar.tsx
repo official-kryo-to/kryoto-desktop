@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Bell, ChevronDown, Expand, Megaphone, Shrink } from 'lucide-react'
 import { artSrc } from '@/lib/art'
 import { Matrix, MenuButton, MenuList, type MenuEntry } from '@/ui'
@@ -7,6 +9,7 @@ import { KryosCoin, compactKryos } from '@/ui/KryosCoin'
 import { closeWindow, isTauri, minimizeWindow, toggleFullscreen, toggleMaximize, useWindowState } from '@/lib/window'
 import { openInbox } from '@/lib/popup'
 import { cn } from '@/lib/utils'
+import { isWindowsHost } from '@/lib/library'
 import type { Account } from '@/hooks/useAccount'
 import type { Inbox, News } from '@/hooks/useInbox'
 
@@ -70,13 +73,13 @@ export function TitleBar({
         {offline ? (
           <span
             title="No connection. The library, your games and settings work as usual; the Store and downloads wait for it."
-            className="kryo-pill pointer-events-auto flex items-center gap-1.5 border border-border px-2.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground"
+            className="no-drag kryo-pill pointer-events-auto flex items-center gap-1.5 border border-border px-2.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground"
           >
             <Matrix state="connect" className="size-3" />
             Offline
           </span>
         ) : null}
-        <DevEndpointNotice />
+        <DevEndpointNotice className="no-drag" />
       </div>
 
       <div className="no-drag flex items-center gap-1.5 pr-2">
@@ -180,20 +183,28 @@ export function TitleBar({
 }
 
 /**
- * Minimize, maximize or restore, and close: the system's own three buttons,
- * drawn thin and full height, with the red close. Maximize follows the window
- * (a drag to the screen's top, a double-click on the bar, the keyboard), not
- * just this button, and hides in full screen, where it means nothing.
+ * Minimize, maximize or restore, and close, as Windows 11 draws them: its own
+ * glyphs (Segoe Fluent Icons, or MDL2 Assets on Windows 10), 46 pixels wide
+ * and the bar's full height, the red close, and dimmed while the window is
+ * not the one in front. Elsewhere the same buttons drawn as one-pixel lines.
+ * Maximize follows the window (a drag to the top of the screen, a double-click
+ * on the bar, Win+Up), not just this button, and hides in full screen.
  */
 function WindowControls() {
   const { maximized, fullscreen } = useWindowState()
+  const active = useWindowFocus()
+  const glyphs = isWindowsHost()
   return (
-    <div className="no-drag flex items-stretch">
-      <WindowButton label="Minimize" onClick={() => void minimizeWindow()}>
+    <div className={cn('no-drag flex items-stretch', !active && 'opacity-60')}>
+      <WindowButton label="Minimize" onClick={() => void minimizeWindow()} glyph={glyphs ? '' : undefined}>
         <path d="M0 5.5h10" />
       </WindowButton>
       {fullscreen ? null : (
-        <WindowButton label={maximized ? 'Restore' : 'Maximize'} onClick={() => void toggleMaximize()}>
+        <WindowButton
+          label={maximized ? 'Restore down' : 'Maximize'}
+          onClick={() => void toggleMaximize()}
+          glyph={glyphs ? (maximized ? '' : '') : undefined}
+        >
           {maximized ? (
             <>
               <path d="M2.5 2.5V0.5h7v7h-2" />
@@ -204,22 +215,43 @@ function WindowControls() {
           )}
         </WindowButton>
       )}
-      <WindowButton label="Close" onClick={() => void closeWindow()} danger>
+      <WindowButton label="Close" onClick={() => void closeWindow()} danger glyph={glyphs ? '' : undefined}>
         <path d="M0.5 0.5l9 9M9.5 0.5l-9 9" />
       </WindowButton>
     </div>
   )
 }
 
+/** Whether this window is the one in front, as Windows dims its buttons when not. */
+function useWindowFocus() {
+  const [active, setActive] = useState(() => (typeof document === 'undefined' ? true : document.hasFocus()))
+  useEffect(() => {
+    if (!isTauri()) return
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void getCurrentWindow()
+      .onFocusChanged(({ payload }) => setActive(payload))
+      .then((fn) => (cancelled ? fn() : (stop = fn)))
+    return () => {
+      cancelled = true
+      stop?.()
+    }
+  }, [])
+  return active
+}
+
 function WindowButton({
   label,
   onClick,
   danger = false,
+  glyph,
   children,
 }: {
   label: string
   onClick: () => void
   danger?: boolean
+  /** A Segoe glyph (Windows), else `children` as one-pixel lines. */
+  glyph?: string
   children: React.ReactNode
 }) {
   return (
@@ -227,23 +259,34 @@ function WindowButton({
       type="button"
       aria-label={label}
       title={label}
+      // A press that turns into a drag would otherwise start moving the
+      // window from its button.
+      onMouseDown={(e) => e.stopPropagation()}
       onClick={onClick}
       className={cn(
-        'kryo-square grid w-[46px] place-items-center text-muted-foreground transition-colors duration-100',
-        danger ? 'hover:bg-[#c42b1c] hover:text-white active:bg-[#c42b1c]/80' : 'hover:bg-secondary hover:text-foreground active:bg-secondary/70',
+        'kryo-square grid w-[46px] place-items-center text-foreground/90 transition-colors duration-75',
+        danger
+          ? 'hover:bg-[#c42b1c] hover:text-white active:bg-[#c42b1c]/90 active:text-white/80'
+          : 'hover:bg-foreground/[0.06] active:bg-foreground/[0.04] active:text-foreground/60',
       )}
     >
-      {/* One device pixel wide at any display scale. */}
-      <svg
-        viewBox="0 0 10 10"
-        className="size-2.5 overflow-visible [&_*]:[vector-effect:non-scaling-stroke]"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1"
-        aria-hidden
-      >
-        {children}
-      </svg>
+      {glyph ? (
+        <span className="kryo-caption" aria-hidden>
+          {glyph}
+        </span>
+      ) : (
+        // One device pixel wide at any display scale.
+        <svg
+          viewBox="0 0 10 10"
+          className="size-2.5 overflow-visible [&_*]:[vector-effect:non-scaling-stroke]"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1"
+          aria-hidden
+        >
+          {children}
+        </svg>
+      )}
     </button>
   )
 }

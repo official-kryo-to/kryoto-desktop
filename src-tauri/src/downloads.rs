@@ -789,7 +789,7 @@ impl Notice {
 /// The kryo.to game whose title is exactly `name` (letters and digits
 /// compared, case aside), from the site's search. Only an exact match: a
 /// download filed under the wrong game would install as it.
-async fn find_slug(client: &reqwest::Client, endpoint: &str, name: &str) -> Option<String> {
+pub(crate) async fn find_slug(client: &reqwest::Client, endpoint: &str, name: &str) -> Option<String> {
     let squash = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
     let wanted = squash(name);
     if wanted.is_empty() {
@@ -810,7 +810,7 @@ async fn find_slug(client: &reqwest::Client, endpoint: &str, name: &str) -> Opti
         .map(str::to_ascii_lowercase)
 }
 
-async fn fetch_meta(client: &reqwest::Client, endpoint: &str, slug: &str) -> Option<CatalogMeta> {
+pub(crate) async fn fetch_meta(client: &reqwest::Client, endpoint: &str, slug: &str) -> Option<CatalogMeta> {
     let res = client.get(format!("{endpoint}/api/games/{slug}")).send().await.ok()?;
     if !res.status().is_success() {
         return None;

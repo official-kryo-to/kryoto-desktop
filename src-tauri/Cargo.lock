@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "kryoto-desktop"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "argon2",
  "base64 0.22.1",

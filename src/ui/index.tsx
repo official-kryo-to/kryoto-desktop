@@ -326,6 +326,13 @@ export function MenuButton({
         }}
         onClick={(e) => {
           if (!useNative) return setOpen(!open)
+          // Pointing at it already opened it (a menu bar, below): the click
+          // that follows is the same intent, not "close it again".
+          if (hoverOpened?.menu === native && Date.now() - hoverOpened.at < 1500) {
+            hoverOpened = null
+            if (popupOpen() !== native) openNative(e.currentTarget)
+            return
+          }
           // A second press on the trigger closes its menu.
           if (nativeOpenNow || justClosed(native!)) return closeMenu()
           openNative(e.currentTarget)
@@ -334,7 +341,10 @@ export function MenuButton({
         // (same id prefix, `title:...`) opens that one instead.
         onPointerEnter={(e) => {
           const cur = popupOpen()
-          if (useNative && cur && cur !== native && cur.split(':')[0] === native!.split(':')[0]) openNative(e.currentTarget)
+          if (useNative && cur && cur !== native && cur.split(':')[0] === native!.split(':')[0]) {
+            hoverOpened = { menu: native!, at: Date.now() }
+            openNative(e.currentTarget)
+          }
         }}
       >
         {trigger}
@@ -347,6 +357,13 @@ export function MenuButton({
     </div>
   )
 }
+
+/**
+ * The menu the pointer opened by moving onto its trigger, and when. The
+ * click that usually follows must not toggle it shut: that made switching
+ * between title menus take two clicks.
+ */
+let hoverOpened: { menu: string; at: number } | null = null
 
 /** Whether the menu view is showing this menu id right now. */
 export function useNativeOpen(menu: string | undefined) {
@@ -468,12 +485,18 @@ export function Dropdown<T extends string>({
   onChange,
   className,
   label,
+  size = 'md',
+  emphasis = false,
 }: {
   value: T
   options: { value: T; label: string; hint?: string }[]
   onChange: (v: T) => void
   className?: string
   label?: string
+  /** `sm`: a compact pill for a row (Settings > Controller's buttons). */
+  size?: 'sm' | 'md'
+  /** Drawn bold with a strong border: the value is not the default. */
+  emphasis?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
@@ -499,7 +522,11 @@ export function Dropdown<T extends string>({
           if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setOpen(true) }
         }}
         onClick={() => setOpen((o) => !o)}
-        className="kryo-pill flex h-9 w-full items-center gap-2 border border-border bg-background pl-4 pr-3 text-left text-xs text-foreground transition-colors hover:border-foreground/60 aria-expanded:border-foreground"
+        className={cn(
+          'kryo-pill flex w-full items-center gap-2 border bg-background text-left text-foreground transition-colors hover:border-foreground/60 aria-expanded:border-foreground',
+          size === 'sm' ? 'h-7 pl-3 pr-2 text-[11px]' : 'h-9 pl-4 pr-3 text-xs',
+          emphasis ? 'border-foreground font-bold' : 'border-border',
+        )}
       >
         <span className="grow truncate">{current?.label ?? 'Choose'}</span>
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />

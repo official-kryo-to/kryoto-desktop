@@ -2,17 +2,16 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri } from '@/lib/window'
 
 /**
- * Moving the frameless window by its `.drag` areas.
+ * Moving the frameless window by its `.drag` areas, where the system does not.
  *
- * Not `-webkit-app-region: drag`: in WebView2 a control inside such an area
- * never gets its cursor. A press on a `.drag` area that is not on a control
- * arms a move, which starts once the pointer actually moves a few pixels.
- * Starting it on the press itself (as before) handed the pointer to the
- * system's move loop straight away, which on Windows swallowed the second
- * click of a double-click, so double-click to maximize rarely worked, and a
- * plain click on the bar could leave the page thinking the button was still
- * down. A double press on an area marked `data-maximize` maximizes or
- * restores, as a real title bar does.
+ * On Windows the `.drag` areas are `app-region: drag` (styles.css): WebView2
+ * hands them to Windows as the title bar, so the press never reaches this
+ * page and dragging, Aero Snap, double-click and the window menu are the
+ * system's. This is the fallback for WebKitGTK (no app-region) and for any
+ * WebView2 that still delivers the press. A press arms a move, which starts
+ * once the pointer actually moves a few pixels (starting on the press itself
+ * swallowed the second click of a double-click), and a double press on an
+ * area marked `data-maximize` maximizes or restores.
  */
 const CONTROL = '.drag, .no-drag, button, a[href], input, textarea, select, [role="button"], [contenteditable="true"]'
 /** How far the pointer moves with the button down before the window follows. */

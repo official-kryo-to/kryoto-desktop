@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BatteryCharging, BatteryMedium, Gamepad2, RotateCcw, Vibrate } from 'lucide-react'
-import { Button, Caption, Check, Matrix, Section, Segmented } from '@/ui'
+import { Button, Caption, Check, Dropdown, Matrix, Section, Segmented } from '@/ui'
 import { PadArtView, PadBadge, type Callout } from '@/controller/PadArtView'
 import { PadSetup } from '@/controller/PadSetup'
 import { openExternal } from '@/lib/window'
@@ -245,21 +245,18 @@ export function ControllerPane() {
                 <PadBadge family={family} control={c} label={padLabel(family, c).long} />
                 <span className="min-w-0 grow truncate text-xs text-foreground">{padLabel(family, c).long}</span>
                 {!current ? null : (
-                  <select
-                    aria-label={`${padLabel(family, c).long} acts as`}
+                  <Dropdown<PadControl>
+                    size="sm"
+                    className="w-32 shrink-0"
+                    label={`${padLabel(family, c).long} acts as`}
                     value={job}
-                    onChange={(e) => setPrefs({ remap: assign(prefs.remap, c, e.target.value as PadControl) })}
-                    className={cn(
-                      'kryo-pill h-7 border bg-background px-2 text-[11px]',
-                      job !== c ? 'border-foreground font-bold text-foreground' : 'border-border text-muted-foreground',
-                    )}
-                  >
-                    {REMAPPABLE.map((j) => (
-                      <option key={j} value={j}>
-                        {j === c ? `${padLabel(family, j).short} (own)` : `as ${padLabel(family, j).short}`}
-                      </option>
-                    ))}
-                  </select>
+                    emphasis={job !== c}
+                    onChange={(v) => setPrefs({ remap: assign(prefs.remap, c, v) })}
+                    options={REMAPPABLE.map((j) => ({
+                      value: j,
+                      label: j === c ? `${padLabel(family, j).short} (own)` : `as ${padLabel(family, j).short}`,
+                    }))}
+                  />
                 )}
               </div>
             )
